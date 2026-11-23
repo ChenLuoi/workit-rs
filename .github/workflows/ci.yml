@@ -16,4 +16,5 @@ jobs:
         with:
           node-version: '24'
           package-manager-cache: false
+      - run: node scripts/smoke-interactive.mjs target/release/wk
       - run: bash scripts/smoke-npm.sh

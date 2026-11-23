@@ -1,4 +1,5 @@
 mod git;
+mod prompt;
 mod report;
 mod tasks;
 mod workspace;
@@ -22,22 +23,41 @@ struct Cli {
 enum Action {
     /// Initialize a workspace in DIR (default: WK_WORKSPACE or current directory).
     Init { dir: Option<PathBuf> },
-    /// Clone a project into repos/ and register it in wk.yaml.
+    /// Clone into a new repos/<directory> and register the project in wk.yaml.
+    ///
+    /// With only a URL, enter a directory and choose a remote branch by prefix.
+    /// Press Enter twice to use the repository name and remote default branch.
+    /// Scripts use these defaults automatically. Use --base for any other Git ref.
+    #[command(visible_alias = "clone")]
     Add {
+        /// Git URL or path to a local repository.
         url: String,
-        #[arg(long)]
-        name: Option<String>,
-        /// Git ref used when creating a task (default: origin/HEAD).
+        /// Project name and directory under repos/ (default: repository name).
+        directory: Option<String>,
+        /// Git ref used when creating a task (default: origin/<remote default branch>).
         #[arg(long)]
         base: Option<String>,
     },
     /// Clone missing projects and fetch origin for existing projects.
     Sync { projects: Vec<String> },
+    /// Remove a project and its local Git repository after checking for work to keep.
+    ///
+    /// Close its tasks and other worktrees first. Local changes and commits
+    /// absent from the locally known origin branches prevent deletion.
+    #[command(visible_alias = "rm")]
+    Remove { project: String },
     /// Create or resume a task and print launch commands.
+    ///
+    /// Omit projects in a terminal to select them with Space and Enter.
+    /// Existing tasks resume with their recorded projects and commits.
     Start {
         task: String,
-        #[arg(required = true)]
+        /// Projects to include (required for a new task outside a terminal).
         projects: Vec<String>,
+        /// Use each project's configured base without asking.
+        #[arg(short = 'D', long = "default")]
+        use_defaults: bool,
+        /// Use cached remote branches and commits without fetching.
         #[arg(long)]
         no_fetch: bool,
     },
@@ -62,7 +82,7 @@ enum Action {
     },
     /// Diagnose workspace and Git inconsistencies.
     Doctor,
-    /// Remove clean worktrees and archive the task, keeping its branches.
+    /// Delete tasks/<task>/ including shared resources after checking all worktrees. Keep the Git branches.
     Close { task: String },
 }
 
@@ -87,13 +107,19 @@ fn execute() -> Result<i32> {
     };
     match cli.command {
         Action::Init { .. } => unreachable!(),
-        Action::Add { url, name, base } => ws.add(&url, name, base)?,
+        Action::Add {
+            url,
+            directory,
+            base,
+        } => ws.add(&url, directory, base)?,
         Action::Sync { projects } => ws.sync(&projects)?,
+        Action::Remove { project } => ws.remove(&project)?,
         Action::Start {
             task,
             projects,
             no_fetch,
-        } => ws.start(&task, &projects, no_fetch)?,
+            use_defaults,
+        } => ws.start(&task, projects, no_fetch, use_defaults)?,
         Action::Path { task, project } => {
             println!("{}", ws.active_path(&task, project.as_deref())?.display())
         }

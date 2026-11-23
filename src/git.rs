@@ -1,7 +1,11 @@
 use anyhow::{Context, Result, bail, ensure};
+use indicatif::ProgressBar;
 use std::{
+    collections::BTreeMap,
+    io::{self, IsTerminal},
     path::{Path, PathBuf},
     process::{Command, Output, Stdio},
+    time::Duration,
 };
 
 pub fn path_arg(path: &Path) -> Result<&str> {
@@ -61,6 +65,74 @@ pub fn git(dir: &Path, args: &[&str]) -> Result<String> {
         .to_owned())
 }
 
+pub fn git_with_progress(dir: &Path, args: &[&str], message: String) -> Result<String> {
+    if !io::stderr().is_terminal() {
+        return git(dir, args);
+    }
+    let spinner = ProgressBar::new_spinner().with_message(message);
+    if !spinner.is_hidden() {
+        spinner.tick();
+        spinner.enable_steady_tick(Duration::from_millis(100));
+    }
+    let result = git(dir, args);
+    spinner.finish_and_clear();
+    result
+}
+
+pub fn fetch_origin(repo: &Path, name: &str) -> Result<()> {
+    git_with_progress(
+        repo,
+        &["fetch", "origin"],
+        format!("Fetching {name} from origin"),
+    )?;
+    Ok(())
+}
+
+/// Short branch names with the advertised default first. Scripts only need HEAD.
+pub fn remote_branches(dir: &Path, url: &str, include_choices: bool) -> Result<Vec<String>> {
+    let mut args = vec!["ls-remote", "--symref", "--", url, "HEAD"];
+    if include_choices {
+        args.push("refs/heads/*");
+    }
+    let refs = git_with_progress(dir, &args, "Reading remote branches".into())?;
+    let default = refs
+        .lines()
+        .find_map(|line| {
+            line.strip_prefix("ref: refs/heads/")?
+                .strip_suffix("\tHEAD")
+        })
+        .context("remote has no advertised default branch; specify --base <ref>")?;
+    let mut branches = vec![default.to_owned()];
+    if include_choices {
+        branches.extend(refs.lines().filter_map(|line| {
+            let (_, name) = line.split_once('\t')?;
+            let branch = name.strip_prefix("refs/heads/")?;
+            (branch != default).then(|| branch.to_owned())
+        }));
+        branches[1..].sort_unstable();
+    }
+    Ok(branches)
+}
+
+/// Snapshot direct origin branches and their fetched commits; omit symbolic origin/HEAD.
+pub fn cached_origin_branches(repo: &Path) -> Result<BTreeMap<String, String>> {
+    let refs = git(
+        repo,
+        &[
+            "for-each-ref",
+            "--format=%(symref)%09%(refname:lstrip=3)%09%(objectname)",
+            "refs/remotes/origin/",
+        ],
+    )?;
+    Ok(refs
+        .lines()
+        .filter_map(|row| {
+            let (name, oid) = row.strip_prefix('\t')?.split_once('\t')?;
+            Some((name.to_owned(), oid.to_owned()))
+        })
+        .collect())
+}
+
 pub fn branch_exists(repo: &Path, branch: &str) -> Result<bool> {
     let out = invoke(
         repo,
@@ -79,6 +151,63 @@ pub fn branch_exists(repo: &Path, branch: &str) -> Result<bool> {
             String::from_utf8_lossy(&out.stderr)
         ),
     }
+}
+
+pub fn check_clone_removal(repo: &Path) -> Result<()> {
+    let listing = bytes(repo, &["worktree", "list", "--porcelain", "-z"])?;
+    let worktrees = listing
+        .split(|b| *b == 0)
+        .filter(|f| f.starts_with(b"worktree "))
+        .count();
+    ensure!(
+        worktrees == 1,
+        "{} has linked worktrees; inspect git worktree list before removal",
+        repo.display()
+    );
+    // A clean status cannot account for private submodule repositories or files
+    // deliberately hidden from the index's working-tree checks.
+    ensure!(
+        !repo.join(".git/modules").try_exists()?,
+        "{} contains submodule repositories; preserve them before removal",
+        repo.display()
+    );
+    let index = bytes(repo, &["ls-files", "-v", "--stage", "-z"])?;
+    for entry in index.split(|b| *b == 0).filter(|entry| !entry.is_empty()) {
+        let flag = entry[0];
+        ensure!(
+            flag != b'S' && !flag.is_ascii_lowercase(),
+            "{} has skip-worktree or assume-unchanged files; restore normal index checks before removal",
+            repo.display()
+        );
+        // A gitlink can hold an independent clone with no entry in .git/modules.
+        if entry[1..].starts_with(b" 160000 ") {
+            let (_, path) = std::str::from_utf8(entry)?
+                .split_once('\t')
+                .context("missing submodule path in the Git index")?;
+            let submodule = repo.join(path);
+            ensure!(
+                !submodule.try_exists()? || submodule.read_dir()?.next().is_none(),
+                "submodule {path} contains local data; preserve it before removal"
+            );
+        }
+    }
+    let commit = git(
+        repo,
+        &[
+            "rev-list",
+            "--max-count=1",
+            "--all",
+            "--reflog",
+            "--not",
+            "--remotes=origin",
+        ],
+    )?;
+    ensure!(
+        commit.is_empty(),
+        "{} contains commit {commit} not reachable from a locally known origin branch; push or back up your work first",
+        repo.display()
+    );
+    Ok(())
 }
 
 pub fn check_root(path: &Path) -> Result<()> {

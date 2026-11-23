@@ -1,8 +1,13 @@
 use crate::{
-    git::{branch_exists, bytes, git, git_path, path_arg, validate_tree},
-    workspace::{Workspace, child, name_ok, read_json, save_json},
+    git::{
+        branch_exists, bytes, cached_origin_branches, fetch_origin, git, git_path, path_arg,
+        validate_tree,
+    },
+    prompt,
+    workspace::{Config, Workspace, child, name_ok, read_json, save_json},
 };
 use anyhow::{Context, Result, ensure};
+use inquire::Confirm;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -96,6 +101,24 @@ fn check_clean(tree: &Path) -> Result<()> {
 }
 
 impl Workspace {
+    pub fn task_names(&self) -> Result<Vec<String>> {
+        let mut names = Vec::new();
+        let records = self.records()?;
+        if records.try_exists()? {
+            for entry in fs::read_dir(records)? {
+                if let Some(name) = entry?
+                    .file_name()
+                    .to_str()
+                    .and_then(|s| s.strip_suffix(".json"))
+                {
+                    names.push(name.to_owned());
+                }
+            }
+        }
+        names.sort_unstable();
+        Ok(names)
+    }
+
     pub fn read_task(&self, name: &str) -> Result<Task> {
         let task: Task = read_json(&self.record(name)?)?;
         ensure!(!task.projects.is_empty(), "empty task {name}");
@@ -110,49 +133,177 @@ impl Workspace {
         Ok(task)
     }
 
-    pub fn start(&self, name: &str, projects: &[String], no_fetch: bool) -> Result<()> {
-        let _lock = self.lock()?;
-        let config = self.config()?;
+    fn choose_start_bases(
+        &self,
+        name: &str,
+        config: &Config,
+        projects: &mut Vec<String>,
+        no_fetch: bool,
+        use_defaults: bool,
+    ) -> Result<BTreeMap<String, Member>> {
+        let interactive = prompt::interactive();
+        if projects.is_empty() {
+            ensure!(
+                !config.projects.is_empty(),
+                "no registered projects; run wk add first"
+            );
+            ensure!(
+                interactive,
+                "specify projects: wk start {name} <project>... (interactive selection requires a terminal)"
+            );
+            *projects = prompt::projects(config.projects.keys().cloned().collect())?;
+        }
+        let selected: BTreeSet<_> = projects.iter().collect();
+        ensure!(selected.len() == projects.len(), "duplicate project");
+        for p in projects.iter() {
+            ensure!(config.projects.contains_key(p), "unknown project {p}");
+        }
+        if !interactive || use_defaults {
+            return Ok(BTreeMap::new());
+        }
+        let defaults = projects
+            .iter()
+            .map(|p| format!("{p}: {}", config.projects[p].base))
+            .collect::<Vec<_>>()
+            .join(", ");
+        if Confirm::new("Use configured default bases?")
+            .with_default(true)
+            .with_help_message(&defaults)
+            .prompt()?
+        {
+            return Ok(BTreeMap::new());
+        }
+        let mut choices = BTreeMap::new();
+        {
+            // Protect fetches and snapshot refs, then release the lock before prompting.
+            let _lock = self.lock()?;
+            let mut repos = BTreeMap::new();
+            for p in selected {
+                let repo = self.verify_clean_repo(p, &config.projects[p])?;
+                ensure!(
+                    !branch_exists(&repo, &branch(name))?,
+                    "{p}: branch wk/{name} already exists"
+                );
+                repos.insert(p, repo);
+            }
+            for (p, repo) in repos {
+                if !no_fetch {
+                    fetch_origin(&repo, p)?;
+                }
+                let refs = cached_origin_branches(&repo)?;
+                ensure!(
+                    !refs.is_empty(),
+                    "{p}: no cached origin branches; run wk sync {p} or use --default"
+                );
+                choices.insert(p, refs);
+            }
+        }
+        let mut members = BTreeMap::new();
+        for (p, refs) in choices {
+            let mut names: Vec<_> = refs.keys().cloned().collect();
+            if let Some(default) = config.projects[p].base.strip_prefix("origin/")
+                && let Some(i) = names.iter().position(|b| b == default)
+            {
+                names[..=i].rotate_right(1);
+            }
+            let chosen = prompt::branch(&format!("Task base for {p}"), names)?;
+            members.insert(
+                p.clone(),
+                Member {
+                    base: format!("origin/{chosen}"),
+                    commit: refs[&chosen].clone(),
+                },
+            );
+        }
+        Ok(members)
+    }
+
+    pub fn start(
+        &self,
+        name: &str,
+        mut projects: Vec<String>,
+        no_fetch: bool,
+        use_defaults: bool,
+    ) -> Result<()> {
         let dir = self.task_dir(name)?;
         let record = self.record(name)?;
         let branch = branch(name);
-        let selected: BTreeSet<_> = projects.iter().collect();
-        ensure!(selected.len() == projects.len(), "duplicate project");
-        let mut repos = BTreeMap::new();
-        for p in &selected {
-            let spec = config
-                .projects
-                .get(*p)
-                .with_context(|| format!("unknown project {p}"))?;
-            repos.insert((*p).clone(), self.verify_repo(p, spec)?);
-        }
-        let mut task = if record.exists() {
+        let snapshot = self.config()?;
+        let creating = !record.try_exists()?;
+        let chosen = if creating {
+            ensure!(
+                !dir.try_exists()?,
+                "task directory already exists: {}",
+                dir.display()
+            );
+            self.choose_start_bases(name, &snapshot, &mut projects, no_fetch, use_defaults)?
+        } else {
+            BTreeMap::new()
+        };
+
+        let _lock = self.lock()?;
+        let config = self.config()?;
+        let mut task = if creating {
+            ensure!(
+                !record.try_exists()? && !dir.try_exists()?,
+                "task {name} appeared while preparing it; rerun wk start {name}"
+            );
+            Task {
+                phase: Phase::Creating,
+                projects: chosen,
+            }
+        } else {
             let task = self.read_task(name)?;
             ensure!(
                 matches!(task.phase, Phase::Creating | Phase::Active),
                 "task {name} is closing or archived"
             );
-            ensure!(
-                task.projects.keys().eq(selected.iter().copied()),
-                "task {name} has a different set of projects"
-            );
-            task
-        } else {
-            ensure!(
-                !dir.exists(),
-                "task directory already exists: {}",
-                dir.display()
-            );
-            let mut members = BTreeMap::new();
-            for (p, repo) in &repos {
+            if !projects.is_empty() {
+                let selected: BTreeSet<_> = projects.iter().collect();
+                ensure!(selected.len() == projects.len(), "duplicate project");
                 ensure!(
-                    !branch_exists(repo, &branch)?,
+                    task.projects.keys().eq(selected),
+                    "task {name} has a different set of projects"
+                );
+            }
+            projects = task.projects.keys().cloned().collect();
+            task
+        };
+        let mut repos = BTreeMap::new();
+        for p in &projects {
+            let spec = config
+                .projects
+                .get(p)
+                .with_context(|| format!("unknown project {p}"))?;
+            let repo = self.verify_clean_repo(p, spec)?;
+            if creating {
+                ensure!(
+                    snapshot.projects.get(p) == Some(spec),
+                    "{p}: configuration changed while preparing the task; retry"
+                );
+                ensure!(
+                    !branch_exists(&repo, &branch)?,
                     "{p}: branch {branch} already exists"
                 );
-                if !no_fetch {
-                    git(repo, &["fetch", "origin"])?;
+            }
+            repos.insert(p.clone(), repo);
+        }
+        if creating {
+            for (p, repo) in &repos {
+                if let Some(member) = task.projects.get(p) {
+                    git(
+                        repo,
+                        &["cat-file", "-e", &format!("{}^{{commit}}", member.commit)],
+                    )
+                    .with_context(|| {
+                        format!("{p}: selected commit is no longer available; retry")
+                    })?;
+                    continue;
                 }
-                let base = config.projects[p].base.as_deref().unwrap_or("origin/HEAD");
+                if !no_fetch {
+                    fetch_origin(repo, p)?;
+                }
+                let base = &config.projects[p].base;
                 let commit = git(
                     repo,
                     &[
@@ -163,22 +314,17 @@ impl Workspace {
                     ],
                 )
                 .with_context(|| format!("{p}: cannot resolve base {base}"))?;
-                members.insert(
+                task.projects.insert(
                     p.clone(),
                     Member {
-                        base: base.into(),
+                        base: base.clone(),
                         commit,
                     },
                 );
             }
             fs::create_dir_all(self.records()?)?;
-            let task = Task {
-                phase: Phase::Creating,
-                projects: members,
-            };
             save_json(&record, &task)?;
-            task
-        };
+        }
         if task.phase == Phase::Creating {
             fs::create_dir_all(&dir)?;
         }
@@ -224,7 +370,7 @@ impl Workspace {
                 fs::write(
                     guide,
                     format!(
-                        "# Task {name}\n\nProjects: {members}.\n\nRead ../../tasks/{name}.md if present. Work in each project's directory, follow its instructions and run its checks there. Commit changes separately per repository.\n"
+                        "# Task {name}\n\nProjects: {members}.\n\nUse this directory as the working directory for all harnesses and editors. Keep task briefs, fixtures and other shared resources here. Each project directory is a separate Git worktree: follow its instructions, run its checks and commit there. Closing the task removes this entire directory.\n"
                     ),
                 )?;
             }
@@ -264,7 +410,11 @@ impl Workspace {
                 .projects
                 .get(p)
                 .with_context(|| format!("unregistered project {p}"))?;
-            validate_tree(&self.verify_repo(p, spec)?, &child(&dir, p)?, &branch(name))?;
+            validate_tree(
+                &self.verify_clean_repo(p, spec)?,
+                &child(&dir, p)?,
+                &branch(name),
+            )?;
         }
         if let Some(p) = project {
             ensure!(
@@ -292,7 +442,7 @@ impl Workspace {
                 .projects
                 .get(p)
                 .with_context(|| format!("unregistered project {p}"))?;
-            let repo = self.verify_repo(p, spec)?;
+            let repo = self.verify_clean_repo(p, spec)?;
             let listing = bytes(&repo, &["worktree", "list", "--porcelain", "-z"])?;
             let row = git_record(&listing, &tree)?;
             if !tree.exists() && row.is_none() && task.phase != Phase::Active {
@@ -317,9 +467,14 @@ impl Workspace {
             check_clean(&tree)?;
             git(&repo, &["worktree", "remove", "--", &git_path(&tree)?])?;
         }
+        // A retry can arrive after the directory was removed but before the record was saved.
+        if dir.try_exists()? {
+            fs::remove_dir_all(&dir)
+                .with_context(|| format!("remove task directory {}", dir.display()))?;
+        }
         task.phase = Phase::Closed;
         save_json(&record, &task)?;
-        println!("Closed {name}. Branches and task-level files retained.");
+        println!("Closed {name}. Task directory removed; project branches retained.");
         Ok(())
     }
 }

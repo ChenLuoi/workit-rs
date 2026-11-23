@@ -1,5 +1,11 @@
-use crate::git::{check_root, git, git_path};
+use crate::git::{
+    check_clone_removal, check_root, fetch_origin, git, git_path, git_with_progress,
+    remote_branches,
+};
+use crate::report::check_reference;
+use crate::tasks::Phase;
 use anyhow::{Context, Result, bail, ensure};
+use inquire::Text;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{
     collections::BTreeMap,
@@ -16,12 +22,12 @@ pub struct Config {
     pub projects: BTreeMap<String, Project>,
 }
 
-#[derive(Deserialize, Serialize, PartialEq)]
+#[derive(Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct Project {
+    pub name: String,
     pub url: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub base: Option<String>,
+    pub base: String,
 }
 
 pub struct Workspace(pub PathBuf);
@@ -84,7 +90,13 @@ impl Config {
         );
         for (name, project) in &self.projects {
             name_ok(name)?;
-            validate_project(project)?;
+            ensure!(
+                project.name == *name,
+                "project key {name} differs from its name {}",
+                project.name
+            );
+            validate_url(&project.url)?;
+            validate_base(&project.base)?;
         }
         Ok(())
     }
@@ -94,20 +106,22 @@ impl Config {
     }
 }
 
-fn validate_project(project: &Project) -> Result<()> {
+fn validate_url(url: &str) -> Result<()> {
     ensure!(
-        !project.url.trim().is_empty()
-            && !project.url.starts_with('-')
-            && !project.url.contains("::")
-            && !project.url.contains(['\n', '\r']),
+        !url.trim().is_empty()
+            && !url.starts_with('-')
+            && !url.contains("::")
+            && !url.contains(['\n', '\r']),
         "invalid Git URL"
     );
-    if let Some(base) = &project.base {
-        ensure!(
-            !base.is_empty() && !base.starts_with('-'),
-            "invalid base ref"
-        );
-    }
+    Ok(())
+}
+
+fn validate_base(base: &str) -> Result<()> {
+    ensure!(
+        !base.trim().is_empty() && !base.starts_with('-') && !base.contains(['\n', '\r']),
+        "invalid base ref"
+    );
     Ok(())
 }
 
@@ -126,7 +140,7 @@ impl Workspace {
             }
             .save(&config)?;
         }
-        for dir in ["repos", "worktrees", "tasks"] {
+        for dir in ["repos", "tasks"] {
             fs::create_dir_all(child(&ws.0, dir)?)?;
         }
         let ignore = child(&ws.0, ".gitignore")?;
@@ -135,7 +149,7 @@ impl Workspace {
             Err(e) if e.kind() == ErrorKind::NotFound => String::new(),
             Err(e) => return Err(e.into()),
         };
-        let missing: Vec<_> = ["/repos/", "/worktrees/", "/.wk/"]
+        let missing: Vec<_> = ["/repos/", "/tasks/", "/.wk/"]
             .into_iter()
             .filter(|entry| !old.lines().any(|line| line == *entry))
             .collect();
@@ -150,7 +164,7 @@ impl Workspace {
         if !guide.exists() {
             fs::write(
                 guide,
-                "# Workspace\n\nWork in worktrees/<task>/<project>. Read each project's instructions before editing. Run Git and tests in the relevant project directory.\n",
+                "# Workspace\n\nUse wk start to create a task. Open tasks/<task>/ in your editor or harness. Keep task resources there and edit each project's code in its worktree at tasks/<task>/<project>/. Read the project's instructions and run Git and tests there. Leave repos/ to wk.\n",
             )?;
         }
         println!("Workspace: {}", ws.0.display());
@@ -224,10 +238,20 @@ impl Workspace {
         Ok(repo)
     }
 
-    fn clone_project(&self, name: &str, project: &Project) -> Result<()> {
-        let repo = self.repo(name)?;
+    pub fn verify_clean_repo(&self, name: &str, project: &Project) -> Result<PathBuf> {
+        let repo = self.verify_repo(name, project)?;
+        check_reference(&repo)?;
+        Ok(repo)
+    }
+
+    fn clone_project(&self, project: &Project) -> Result<()> {
+        let repo = self.repo(&project.name)?;
+        let destination = git_path(&repo)?;
         fs::create_dir_all(repo.parent().unwrap())?;
-        git(
+        // Git accepts an existing empty directory. Reserve a new one exclusively.
+        fs::create_dir(&repo)
+            .with_context(|| format!("create new directory {}", repo.display()))?;
+        let cloned = git_with_progress(
             &self.0,
             &[
                 "clone",
@@ -235,45 +259,138 @@ impl Workspace {
                 "origin",
                 "--",
                 &project.url,
-                &git_path(&repo)?,
+                &destination,
             ],
-        )?;
+            format!("Cloning {}", project.name),
+        );
+        if let Err(err) = cloned {
+            // Remove only our empty reservation; preserve any files left by Git.
+            let _ = fs::remove_dir(&repo);
+            return Err(err);
+        }
         Ok(())
     }
 
-    pub fn add(&self, url: &str, name: Option<String>, base: Option<String>) -> Result<()> {
+    fn require_new_project(&self, config: &Config, name: &str) -> Result<()> {
+        ensure!(
+            !config.projects.contains_key(name),
+            "project {name} is already registered"
+        );
+        let repo = self.repo(name)?;
+        ensure!(
+            !repo.try_exists()?,
+            "directory already exists: {}",
+            repo.display()
+        );
+        Ok(())
+    }
+
+    pub fn add(&self, url: &str, directory: Option<String>, base: Option<String>) -> Result<()> {
+        let interactive = directory.is_none() && base.is_none() && crate::prompt::interactive();
+        let path = Path::new(url);
+        let (url, local_name) = if path.exists() {
+            (
+                git_path(&path.canonicalize()?)?,
+                path.file_name().and_then(|s| s.to_str()),
+            )
+        } else {
+            (url.to_owned(), None)
+        };
+        validate_url(&url)?;
+        let source = url.trim_end_matches('/');
+        let source = source.strip_suffix("/.git").unwrap_or(source);
+        let leaf = local_name
+            .filter(|name| *name != ".git")
+            .unwrap_or_else(|| source.rsplit(['/', ':']).next().unwrap_or(""));
+        let default_name = leaf.strip_suffix(".git").unwrap_or(leaf);
+        let name = if interactive {
+            Text::new("Project directory")
+                .with_default(default_name)
+                .prompt()?
+                .trim()
+                .to_owned()
+        } else {
+            directory.unwrap_or_else(|| default_name.into())
+        };
+        self.require_new_project(&self.config()?, &name)?;
+        let base = match base {
+            Some(base) => base,
+            None => {
+                let branches = remote_branches(&self.0, &url, interactive)?;
+                let branch = if interactive {
+                    crate::prompt::branch("Task base", branches)?
+                } else {
+                    branches[0].clone()
+                };
+                format!("origin/{branch}")
+            }
+        };
+        validate_base(&base)?;
+
+        // Another writer may have used the name while the user was answering.
         let _lock = self.lock()?;
         let mut config = self.config()?;
-        let name = name.unwrap_or_else(|| {
-            url.trim_end_matches('/')
-                .rsplit(['/', ':'])
-                .next()
-                .unwrap_or("")
-                .trim_end_matches(".git")
-                .into()
-        });
-        name_ok(&name)?;
-        let url = if Path::new(url).exists() {
-            git_path(&Path::new(url).canonicalize()?)?
-        } else {
-            url.into()
+        self.require_new_project(&config, &name)?;
+        let project = Project {
+            name: name.clone(),
+            url,
+            base,
         };
-        let project = Project { url, base };
-        validate_project(&project)?;
-        if let Some(old) = config.projects.get(&name) {
+        self.clone_project(&project)?;
+        config.projects.insert(name.clone(), project);
+        config.save(&child(&self.0, MANIFEST)?).with_context(|| {
+            format!("cloned repos/{name} but could not register it in {MANIFEST}")
+        })?;
+        println!("Registered {name}");
+        Ok(())
+    }
+
+    pub fn remove(&self, name: &str) -> Result<()> {
+        let _lock = self.lock()?;
+        let mut config = self.config()?;
+        let spec = config
+            .projects
+            .remove(name)
+            .with_context(|| format!("unknown project {name}"))?;
+        for task_name in self.task_names()? {
+            let task = self.read_task(&task_name)?;
             ensure!(
-                old == &project,
-                "{name} already registered with different settings"
+                task.phase == Phase::Closed || !task.projects.contains_key(name),
+                "project {name} is used by task {task_name}; close it with wk close {task_name} first"
             );
         }
-        if self.repo(&name)?.exists() {
-            self.verify_repo(&name, &project)?;
+        let repo = self.repo(name)?;
+        let manifest = child(&self.0, MANIFEST)?;
+        if repo.try_exists()? {
+            self.verify_clean_repo(name, &spec)?;
+            check_clone_removal(&repo)?;
+            // Keep the clone recoverable until the manifest replacement succeeds.
+            let stage = tempfile::Builder::new()
+                .prefix(&format!("remove-{name}-"))
+                .tempdir_in(child(&self.0, ".wk")?)?;
+            let staged = stage.path().join(name);
+            fs::rename(&repo, &staged)
+                .with_context(|| format!("move {} for removal", repo.display()))?;
+            if let Err(error) = config.save(&manifest) {
+                if let Err(restore) = fs::rename(&staged, &repo) {
+                    let _ = stage.keep();
+                    bail!(
+                        "{error:#}; restore failed ({restore}); clone preserved at {}",
+                        staged.display()
+                    );
+                }
+                return Err(error);
+            }
+            stage.close().with_context(|| {
+                format!(
+                    "removed {name} from the manifest; could not finish deleting {}",
+                    staged.display()
+                )
+            })?;
         } else {
-            self.clone_project(&name, &project)?;
+            config.save(&manifest)?;
         }
-        config.projects.insert(name.clone(), project);
-        config.save(&child(&self.0, MANIFEST)?)?;
-        println!("Registered {name}");
+        println!("Removed {name}");
         Ok(())
     }
 
@@ -287,14 +404,17 @@ impl Workspace {
         };
         for name in &names {
             ensure!(config.projects.contains_key(name), "unknown project {name}");
+            if self.repo(name)?.try_exists()? {
+                self.verify_clean_repo(name, &config.projects[name])?;
+            }
         }
         for name in names {
             let project = &config.projects[&name];
             if self.repo(&name)?.exists() {
-                let repo = self.verify_repo(&name, project)?;
-                git(&repo, &["fetch", "origin"])?;
+                let repo = self.repo(&name)?;
+                fetch_origin(&repo, &name)?;
             } else {
-                self.clone_project(&name, project)?;
+                self.clone_project(project)?;
             }
             println!("Synced {name}");
         }
@@ -303,7 +423,7 @@ impl Workspace {
 
     pub fn task_dir(&self, name: &str) -> Result<PathBuf> {
         name_ok(name)?;
-        child(&child(&self.0, "worktrees")?, name)
+        child(&child(&self.0, "tasks")?, name)
     }
 
     pub fn records(&self) -> Result<PathBuf> {

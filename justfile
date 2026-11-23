@@ -11,6 +11,11 @@ check:
     cargo clippy --locked --all-targets -- -D warnings
     cargo test --locked
 
+# Drive interactive add and start in a temporary workspace.
+smoke-interactive:
+    cargo build --locked
+    node scripts/smoke-interactive.mjs target/debug/wk
+
 # Pack and exercise the npm CLI locally using a temporary directory.
 smoke-npm:
     cargo build --release --locked

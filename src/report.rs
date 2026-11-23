@@ -1,5 +1,5 @@
 use crate::{
-    git::{bytes, git, validate_tree},
+    git::{bytes, fetch_origin, git, validate_tree},
     tasks::{Phase, branch},
     workspace::{Workspace, child},
 };
@@ -17,25 +17,33 @@ struct Checkout {
     modified: usize,
     untracked: usize,
     conflicts: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reference_issue: Option<String>,
 }
 
-fn checkout(dir: &Path) -> Result<Checkout> {
+fn checkout(dir: &Path, reference: bool) -> Result<Checkout> {
     let mut state = Checkout::default();
-    let output = bytes(
-        dir,
-        &[
-            "--no-optional-locks",
-            "status",
-            "--porcelain=v2",
-            "--branch",
-            "-z",
-            "--untracked-files=all",
-            "--ignore-submodules=none",
-        ],
-    )?;
+    let mut args = vec![
+        "--no-optional-locks",
+        "status",
+        "--porcelain=v2",
+        "--branch",
+        "--ahead-behind",
+        "-z",
+        "--untracked-files=all",
+        "--ignore-submodules=none",
+    ];
+    if reference {
+        args.push("--ignored=matching");
+    }
+    let output = bytes(dir, &args)?;
+    let mut ignored = false;
+    let mut unborn = false;
     let mut rows = output.split(|b| *b == 0);
     while let Some(row) = rows.next() {
-        if let Some(s) = row.strip_prefix(b"# branch.head ") {
+        if row == b"# branch.oid (initial)" {
+            unborn = true;
+        } else if let Some(s) = row.strip_prefix(b"# branch.head ") {
             state.branch = String::from_utf8_lossy(s).into_owned();
         } else if let Some(s) = row.strip_prefix(b"# branch.upstream ") {
             state.upstream = Some(String::from_utf8_lossy(s).into_owned());
@@ -56,11 +64,59 @@ fn checkout(dir: &Path) -> Result<Checkout> {
                 }
                 Some(b'u') => state.conflicts += 1,
                 Some(b'?') => state.untracked += 1,
+                Some(b'!') => ignored = true,
                 _ => (),
             }
         }
     }
+    if reference {
+        let default_branch = git(
+            dir,
+            &[
+                "for-each-ref",
+                "--format=%(symref:lstrip=3)",
+                "refs/remotes/origin/HEAD",
+            ],
+        )?;
+        state.reference_issue =
+            if state.staged + state.modified + state.untracked + state.conflicts > 0 {
+                Some("reference clone has local changes or untracked files".into())
+            } else if ignored {
+                Some("reference clone contains ignored files".into())
+            } else if !default_branch.is_empty() && default_branch != state.branch {
+                Some(format!(
+                    "reference clone is on {}, expected {default_branch}",
+                    state.branch
+                ))
+            } else if !unborn
+                && !git(
+                    dir,
+                    &[
+                        "rev-list",
+                        "--max-count=1",
+                        "HEAD",
+                        "--not",
+                        "--remotes=origin",
+                    ],
+                )?
+                .is_empty()
+            {
+                Some("reference HEAD contains a commit not on a locally known origin branch".into())
+            } else {
+                None
+            };
+    }
     Ok(state)
+}
+
+pub(crate) fn check_reference(dir: &Path) -> Result<()> {
+    if let Some(issue) = checkout(dir, true)?.reference_issue {
+        anyhow::bail!(
+            "{}: {issue}; preserve your work and restore the reference clone. Use wk start for development",
+            dir.display()
+        );
+    }
+    Ok(())
 }
 
 #[derive(Serialize)]
@@ -99,6 +155,9 @@ impl std::fmt::Display for Entry {
                 } else {
                     write!(f, " | no upstream")?;
                 }
+                if let Some(issue) = &c.reference_issue {
+                    write!(f, " | {issue}")?;
+                }
                 Ok(())
             }
         }
@@ -125,35 +184,26 @@ impl Workspace {
         let tasks = if let Some(name) = selected {
             vec![name.to_owned()]
         } else {
-            let mut names = Vec::new();
-            let records = self.records()?;
-            if records.exists() {
-                for entry in fs::read_dir(records)? {
-                    if let Some(name) = entry?
-                        .file_name()
-                        .to_str()
-                        .and_then(|s| s.strip_suffix(".json"))
-                    {
-                        names.push(name.to_owned());
-                    }
-                }
-            }
-            names
+            self.task_names()?
         };
         let selected_task = selected.map(|t| self.read_task(t)).transpose()?;
-        for (p, spec) in &config.projects {
-            if selected_task
+        let projects = config.projects.iter().filter(|(p, _)| {
+            selected_task
                 .as_ref()
-                .is_some_and(|t| !t.projects.contains_key(p))
-            {
-                continue;
+                .is_none_or(|t| t.projects.contains_key(*p))
+        });
+        if fetch {
+            for (p, spec) in projects.clone() {
+                self.verify_clean_repo(p, spec)?;
             }
-            let result = self.verify_repo(p, spec).and_then(|repo| {
-                if fetch {
-                    git(&repo, &["fetch", "origin"])?;
-                }
-                checkout(&repo)
-            });
+        }
+        for (p, spec) in projects {
+            if fetch {
+                fetch_origin(&self.repo(p)?, p)?;
+            }
+            let result = self
+                .verify_repo(p, spec)
+                .and_then(|repo| checkout(&repo, true));
             report.projects.insert(p.clone(), result.into());
         }
         for name in tasks {
@@ -170,7 +220,7 @@ impl Workspace {
                         let repo = self.verify_repo(p, spec)?;
                         let tree = child(&dir, p)?;
                         validate_tree(&repo, &tree, &branch(&name))?;
-                        checkout(&tree)
+                        checkout(&tree, false)
                     })();
                     projects.insert(p.clone(), result.into());
                 }
@@ -211,8 +261,15 @@ impl Workspace {
         let report = self.inspect(None, false)?;
         let mut issues = Vec::new();
         for (p, entry) in &report.projects {
-            if let Entry::Error { error } = entry {
-                issues.push(format!("project {p}: {error}"));
+            match entry {
+                Entry::Error { error } => issues.push(format!("project {p}: {error}")),
+                Entry::Ok(checkout) => {
+                    if let Some(issue) = &checkout.reference_issue {
+                        issues.push(format!(
+                            "project {p}: {issue}; use wk start for development"
+                        ));
+                    }
+                }
             }
         }
         for (name, task) in &report.tasks {
@@ -225,7 +282,7 @@ impl Workspace {
                 }
             }
         }
-        for dir in ["repos", "worktrees"] {
+        for dir in ["repos", "tasks"] {
             let root = child(&self.0, dir)?;
             if !root.is_dir() {
                 issues.push(format!("missing {dir}/"));
@@ -234,7 +291,14 @@ impl Workspace {
             for entry in fs::read_dir(root)? {
                 let entry = entry?;
                 let name = entry.file_name().to_string_lossy().into_owned();
-                if !(if dir == "repos" {
+                if dir == "tasks"
+                    && report
+                        .tasks
+                        .get(&name)
+                        .is_some_and(|t| t.phase == Phase::Closed)
+                {
+                    issues.push(format!("directory for closed task: {dir}/{name}"));
+                } else if !(if dir == "repos" {
                     report.projects.contains_key(&name)
                 } else {
                     report.tasks.contains_key(&name)
