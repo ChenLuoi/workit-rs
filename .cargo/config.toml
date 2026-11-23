@@ -1,0 +1,2 @@
+[env]
+WK_WORKSPACE = { value = ".wk-dev", relative = true }

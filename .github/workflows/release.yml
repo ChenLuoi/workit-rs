@@ -1,0 +1,100 @@
+name: Release
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.targets.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - run: rustup default 1.94.0
+      - run: node scripts/npm-package.mjs check
+      - if: github.event_name == 'push'
+        run: node scripts/npm-package.mjs check "$GITHUB_REF_NAME"
+      - run: cargo test --locked
+      - run: cargo package --locked --registry crates-io
+      - run: mkdir -p dist && npm pack --pack-destination dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: npm-main
+          path: dist/*.tgz
+          if-no-files-found: error
+      - id: targets
+        run: echo "matrix=$(node scripts/npm-package.mjs matrix)" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: validate
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.validate.outputs.matrix) }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - run: rustup toolchain install 1.94.0 --profile minimal --target "${{ matrix.rust }}"
+      - if: endsWith(matrix.target, '-musl')
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - run: cargo +1.94.0 build --release --locked --target "${{ matrix.rust }}"
+      - if: "!endsWith(matrix.target, '-musl')"
+        run: cargo +1.94.0 test --locked --target "${{ matrix.rust }}"
+      - run: |
+          binary="target/${{ matrix.rust }}/release/${{ matrix.binary }}"
+          "$binary" --version
+          node scripts/npm-package.mjs stage "${{ matrix.target }}" "$binary" dist/platform
+          npm pack ./dist/platform --pack-destination dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: npm-${{ matrix.target }}
+          path: dist/*.tgz
+          if-no-files-found: error
+
+  crates-io:
+    needs: build
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    environment: release
+    steps:
+      - uses: actions/checkout@v7
+      - run: cargo publish --locked --registry crates-io
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+  npmjs:
+    needs: build
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    environment: release
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: npm-*
+          merge-multiple: true
+          path: dist
+      - run: node scripts/publish-npm.mjs dist
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

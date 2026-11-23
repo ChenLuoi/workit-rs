@@ -1,0 +1,32 @@
+{
+  "name": "workit-rs",
+  "version": "0.1.0",
+  "description": "A multi-repository Git workspace and task worktree manager",
+  "license": "MIT",
+  "bin": {
+    "wk": "bin/wk.cjs"
+  },
+  "files": [
+    "bin/wk.cjs",
+    "README.md",
+    "README.zh-CN.md",
+    "AGENTS.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org/",
+    "access": "public"
+  },
+  "optionalDependencies": {
+    "@workit-rs/linux-x64-gnu": "0.1.0",
+    "@workit-rs/linux-arm64-gnu": "0.1.0",
+    "@workit-rs/linux-x64-musl": "0.1.0",
+    "@workit-rs/linux-arm64-musl": "0.1.0",
+    "@workit-rs/darwin-x64": "0.1.0",
+    "@workit-rs/darwin-arm64": "0.1.0",
+    "@workit-rs/win32-x64-msvc": "0.1.0"
+  }
+}

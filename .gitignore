@@ -1,0 +1,6 @@
+/target/
+/dist/
+/node_modules/
+/workit-rs-*.tgz
+/.aws/
+/.wk-dev/
