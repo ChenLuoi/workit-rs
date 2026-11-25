@@ -4,7 +4,33 @@ English | [简体中文](README.zh-CN.md)
 
 This repository develops `wk`, a Rust CLI that coordinates tasks across Git repositories. A workspace session selects the projects and starts a task. The user opens a fresh agent or editor session in the task's directory, with one linked worktree per project.
 
-Install the CLI with `cargo install workit-rs --locked` or `npm install -g workit-rs`. Both install the `wk` command and require Git for workspace operations.
+## Install
+
+Download a standalone executable from [GitHub Releases](https://github.com/ChenLuoi/workit-rs/releases/latest). Pick `linux-{x64,arm64}-{gnu,musl}`, `darwin-{x64,arm64}`, or `win32-x64-msvc.exe` for your system. The executable only needs Git on `PATH` for workspace operations.
+
+The following commands install v0.1.2 on Linux x64 with glibc.
+
+```sh
+(
+  set -e
+  tmp=$(mktemp -d)
+  trap 'rm -rf -- "$tmp"' EXIT
+  cd "$tmp"
+  version=0.1.2
+  asset="workit-rs-$version-linux-x64-gnu"
+  base="https://github.com/ChenLuoi/workit-rs/releases/download/v$version"
+  curl -fsSLO "$base/$asset"
+  curl -fsSLO "$base/SHA256SUMS"
+  awk -v file="$asset" '$2 == file' SHA256SUMS | sha256sum -c -
+  mkdir -p "$HOME/.local/bin"
+  install -m 755 "$asset" "$HOME/.local/bin/wk"
+  "$HOME/.local/bin/wk" --version
+)
+```
+
+Add `~/.local/bin` to `PATH` to run `wk`. On macOS, select the Darwin asset and use `shasum -a 256 -c -` for the checksum step. On Windows, compare `Get-FileHash <download> -Algorithm SHA256` with `SHA256SUMS`, rename the download to `wk.exe`, and place it in a directory on `PATH`.
+
+You can also install with `cargo install workit-rs --locked` or `npm install -g workit-rs`.
 
 ## Develop from source
 

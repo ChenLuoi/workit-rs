@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { chmodSync, copyFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { extname, join } from 'node:path';
 
 const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
 const targets = [
@@ -16,10 +17,11 @@ const targets = [
   target, rust, runner, binary: target.startsWith('win32') ? 'wk.exe' : 'wk',
 }));
 const platformName = target => '@workit-rs/' + target;
-const [cmd, arg, binary, dest] = process.argv.slice(2);
+const [cmd, ...args] = process.argv.slice(2);
 
 switch (cmd) {
   case 'check': {
+    const [tag] = args;
     const meta = JSON.parse(execFileSync('cargo', ['metadata', '--locked', '--no-deps', '--format-version', '1']));
     const crate = meta.packages.find(p => p.name === 'workit-rs');
     assert.ok(crate?.targets.some(t => t.kind.includes('bin') && t.name === 'wk'));
@@ -28,19 +30,20 @@ switch (cmd) {
     assert.equal(pkg.repository.url, 'git+' + crate.repository + '.git');
     assert.equal(pkg.bin.wk, 'bin/wk.cjs');
     assert.deepEqual(pkg.optionalDependencies, Object.fromEntries(targets.map(t => [platformName(t.target), pkg.version])));
-    if (arg) assert.equal(arg, 'v' + pkg.version, 'tag must match Cargo and npm versions');
+    if (tag) assert.equal(tag, 'v' + pkg.version, 'tag must match Cargo and npm versions');
     break;
   }
   case 'matrix':
     console.log(JSON.stringify({ include: targets }));
     break;
   case 'stage': {
-    const target = targets.find(t => t.target === arg);
+    const [platform, binary, dest] = args;
+    const target = targets.find(t => t.target === platform);
     assert.ok(target && binary && dest, 'usage: stage <target> <built-binary> <package-dir>');
-    const [os, cpu, abi] = target.target.split('-');
+    const [os, cpu, abi] = platform.split('-');
     const manifest = {
-      name: platformName(arg), version: pkg.version, license: pkg.license, repository: pkg.repository,
-      description: pkg.description + ' (' + arg + ')',
+      name: platformName(platform), version: pkg.version, license: pkg.license, repository: pkg.repository,
+      description: pkg.description + ' (' + platform + ')',
       os: [os], cpu: [cpu], files: ['bin/', 'LICENSE'],
       ...(os === 'linux' && {libc: [abi === 'gnu' ? 'glibc' : 'musl']}),
     };
@@ -52,6 +55,28 @@ switch (cmd) {
     writeFileSync(join(dest, 'package.json'), JSON.stringify(manifest, null, 2) + '\n');
     break;
   }
+  case 'github-assets': {
+    const [archiveDir, outputDir] = args;
+    assert.ok(archiveDir && outputDir, 'usage: github-assets <npm-tarball-dir> <new-output-dir>');
+    mkdirSync(outputDir);
+    const sha256 = data => createHash('sha256').update(data).digest('hex');
+    const assets = targets.map(({ target, rust, binary }) => {
+      const npmPackage = platformName(target);
+      const archive = join(archiveDir, `${npmPackage.slice(1).replace('/', '-')}-${pkg.version}.tgz`);
+      const data = execFileSync('tar', ['-xOzf', archive, 'package/bin/' + binary], { maxBuffer: Infinity });
+      assert.ok(data.length, `empty binary in ${archive}`);
+      const fileName = `${pkg.name}-${pkg.version}-${target}${extname(binary)}`;
+      writeFileSync(join(outputDir, fileName), data, { mode: 0o755 });
+      return { kind: 'binary', fileName, bytes: data.length, sha256: sha256(data), target, npmPackage, rustTarget: rust };
+    });
+    const commit = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+    const manifest = JSON.stringify({ package: pkg.name, version: pkg.version, tag: 'v' + pkg.version, commit, assets }, null, 2) + '\n';
+    writeFileSync(join(outputDir, 'release-manifest.json'), manifest);
+    const checksums = assets.map(asset => `${asset.sha256}  ${asset.fileName}`);
+    checksums.push(`${sha256(manifest)}  release-manifest.json`);
+    writeFileSync(join(outputDir, 'SHA256SUMS'), checksums.join('\n') + '\n');
+    break;
+  }
   default:
-    throw new Error('expected check, matrix or stage');
+    throw new Error('expected check, matrix, stage or github-assets');
 }
