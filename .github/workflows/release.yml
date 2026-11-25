@@ -101,6 +101,53 @@ jobs:
           merge-multiple: true
           path: dist
       - run: node scripts/publish-npm.mjs dist --dry-run
+      - name: Assemble binaries from the tested platform packages
+        run: node scripts/npm-package.mjs github-assets dist dist/github
+      - name: Verify GitHub Release assets
+        working-directory: dist/github
+        run: |
+          sha256sum --check SHA256SUMS
+          version=$(jq -r .version release-manifest.json)
+          binary="./workit-rs-${version}-linux-x64-musl"
+          test "$("$binary" --version)" = "wk $version"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: github-release-assets
+          path: dist/github/
+          if-no-files-found: error
+
+  github-release:
+    needs: [ci, npm-check]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: github-release-assets
+          path: assets
+      - name: Publish verified binaries on the tagged GitHub Release
+        working-directory: assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          sha256sum --check SHA256SUMS
+          tag="$GITHUB_REF_NAME"
+          if ! gh release view "$tag" >/dev/null 2>&1; then
+            flags=(--draft --verify-tag --generate-notes --title "$tag")
+            if [[ "$tag" == *-* ]]; then flags+=(--prerelease); fi
+            gh release create "$tag" "${flags[@]}" --notes \
+              "Download the executable for your platform and verify it with SHA256SUMS. [Installation instructions](https://github.com/$GH_REPO/blob/$tag/README.md#install)"
+          fi
+          if [[ "$(gh release view "$tag" --json isDraft --jq .isDraft)" == true ]]; then
+            gh release upload "$tag" ./* --clobber
+            gh release edit "$tag" --draft=false
+          else
+            gh release download "$tag" --dir "$RUNNER_TEMP/published"
+            diff -qr . "$RUNNER_TEMP/published"
+          fi
 
   crates-io:
     needs: [ci, npm-check]

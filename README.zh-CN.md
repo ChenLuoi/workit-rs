@@ -4,7 +4,33 @@
 
 本仓库用于开发 Rust 命令行工具 `wk`，它让一个任务可以涉及多个 Git 项目。工作区会话负责选择项目和发起任务。用户随后在任务目录中开启新的 agent 或编辑器会话，每个参与项目都有独立的 Git worktree。
 
-可以用 `cargo install workit-rs --locked` 或 `npm install -g workit-rs` 安装。两个渠道都提供 `wk` 命令，工作区操作需要 Git。
+## 安装
+
+从 [GitHub Releases](https://github.com/ChenLuoi/workit-rs/releases/latest) 下载独立可执行文件。按系统选择 `linux-{x64,arm64}-{gnu,musl}`、`darwin-{x64,arm64}` 或 `win32-x64-msvc.exe`。使用工作区功能只需能从 `PATH` 调用 Git。
+
+以下命令适用于在使用 glibc 的 Linux x64 上安装 v0.1.2。
+
+```sh
+(
+  set -e
+  tmp=$(mktemp -d)
+  trap 'rm -rf -- "$tmp"' EXIT
+  cd "$tmp"
+  version=0.1.2
+  asset="workit-rs-$version-linux-x64-gnu"
+  base="https://github.com/ChenLuoi/workit-rs/releases/download/v$version"
+  curl -fsSLO "$base/$asset"
+  curl -fsSLO "$base/SHA256SUMS"
+  awk -v file="$asset" '$2 == file' SHA256SUMS | sha256sum -c -
+  mkdir -p "$HOME/.local/bin"
+  install -m 755 "$asset" "$HOME/.local/bin/wk"
+  "$HOME/.local/bin/wk" --version
+)
+```
+
+将 `~/.local/bin` 加入 `PATH` 后即可运行 `wk`。macOS 请选择对应的 Darwin 文件，校验命令使用 `shasum -a 256 -c -`。Windows 可用 `Get-FileHash <下载文件> -Algorithm SHA256` 与 `SHA256SUMS` 对照，随后将文件重命名为 `wk.exe`，放入 `PATH` 中的目录。
+
+也可以用 `cargo install workit-rs --locked` 或 `npm install -g workit-rs` 安装。
 
 ## 从源码开发
 
