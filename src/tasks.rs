@@ -5,7 +5,7 @@ use crate::{
     },
     preset::{self, Preset},
     prompt, task_skills,
-    workspace::{Config, Workspace, child, name_ok, save_yaml, task_name_ok},
+    workspace::{Config, Workspace, child, name_ok, publish_directory, save_yaml, task_name_ok},
 };
 use anyhow::{Context, Result, ensure};
 use inquire::Confirm;
@@ -235,6 +235,20 @@ fn check_clean(tree: &Path) -> Result<()> {
         .is_empty(),
         "{} contains ignored files; move or remove them before closing",
         tree.display()
+    );
+    Ok(())
+}
+
+pub(crate) fn check_task_git_dir(dir: &Path) -> Result<()> {
+    let dot_git = child(dir, ".git")?;
+    ensure!(
+        dot_git.is_dir()
+            && git(
+                dir,
+                &["--git-dir=.git", "rev-parse", "--is-bare-repository"]
+            )? == "true",
+        "expected a bare Git repository at {}",
+        dot_git.display()
     );
     Ok(())
 }
@@ -552,6 +566,16 @@ impl Workspace {
         }
         if task.phase == Phase::Creating {
             fs::create_dir_all(&dir)?;
+            let dot_git = child(&dir, ".git")?;
+            if !dot_git.try_exists()? {
+                // Publish a complete discovery boundary so an interrupted start can retry.
+                let staged = tempfile::tempdir_in(&dir)?;
+                git(
+                    staged.path(),
+                    &["init", "--quiet", "--bare", "--template=", "."],
+                )?;
+                publish_directory(staged.path(), &dot_git)?;
+            }
             if !task.skills.is_empty() {
                 task_skills::install_snapshot(
                     &dir,
@@ -560,6 +584,7 @@ impl Workspace {
                 )?;
             }
         }
+        check_task_git_dir(&dir)?;
         for (p, member) in &task.projects {
             let repo = &repos[p];
             let tree = child(&dir, p)?;
@@ -631,6 +656,7 @@ impl Workspace {
     pub fn active_path(&self, name: &str, task: &Task, project: Option<&str>) -> Result<PathBuf> {
         ensure!(task.phase == Phase::Active, "task {name} is not active");
         let dir = self.task_dir(name)?;
+        check_task_git_dir(&dir)?;
         let config = self.config()?;
         for p in task.projects.keys() {
             let spec = config
@@ -660,6 +686,22 @@ impl Workspace {
             .with_context(|| format!("no open task {name}"))?;
         let config = self.config()?;
         let dir = self.task_dir(name)?;
+        if child(&dir, ".git")?.try_exists()? {
+            check_task_git_dir(&dir)?;
+            let reference = git(
+                &dir,
+                &[
+                    "--git-dir=.git",
+                    "for-each-ref",
+                    "--count=1",
+                    "--format=%(refname)",
+                ],
+            )?;
+            ensure!(
+                reference.is_empty(),
+                "task {name} contains {reference} in its root repository; preserve and remove the ref before closing"
+            );
+        }
         let mut removals = Vec::new();
         for (p, member) in &mut task.projects {
             let tree = child(&dir, p)?;

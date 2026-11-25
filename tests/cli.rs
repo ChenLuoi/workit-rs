@@ -479,6 +479,56 @@ fn two_project_lifecycle_and_safe_close() {
 }
 
 #[test]
+fn task_root_stops_git_discovery_at_the_task() {
+    let tmp = tempfile::tempdir().unwrap();
+    let ws = fixture(tmp.path());
+    let name = "feature/login";
+    ok(&ws, WK, &["start", name, "api", "ops", "--no-fetch"]);
+    let task = ws.join("tasks").join(name);
+    let shared = task.join("fixtures");
+    fs::create_dir(&shared).unwrap();
+    let expected_git_dir = task.canonicalize().unwrap().join(".git");
+    for dir in [&task, &shared] {
+        let git_dir = ok(dir, "git", &["rev-parse", "--absolute-git-dir"]);
+        assert_eq!(
+            Path::new(git_dir.trim()).canonicalize().unwrap(),
+            expected_git_dir
+        );
+        assert_eq!(
+            ok(dir, "git", &["rev-parse", "--is-bare-repository"]).trim(),
+            "true"
+        );
+        assert!(!run(dir, "git", &["add", "."]).status.success());
+    }
+    for project in ["api", "ops"] {
+        let tree = task.join(project);
+        let root = ok(&tree, "git", &["rev-parse", "--show-toplevel"]);
+        assert_eq!(
+            Path::new(root.trim()).canonicalize().unwrap(),
+            tree.canonicalize().unwrap()
+        );
+        assert_eq!(ok(&tree, "git", &["branch", "--show-current"]).trim(), name);
+    }
+    fs::rename(task.join(".git"), task.join("saved.git")).unwrap();
+    let launch = run(&ws, WK, &["run", name, "--codex"]);
+    assert!(!launch.status.success());
+    assert!(String::from_utf8_lossy(&launch.stderr).contains("expected a bare Git repository"));
+    let doctor = run(&ws, WK, &["doctor"]);
+    assert!(!doctor.status.success());
+    assert!(String::from_utf8_lossy(&doctor.stdout).contains("Task Git directory"));
+    fs::rename(task.join("saved.git"), task.join(".git")).unwrap();
+
+    // Preserve any ref explicitly stored at the task root before removing worktrees.
+    ok(&task, "git", &["fetch", "./api", "HEAD:refs/heads/saved"]);
+    let close = run(&ws, WK, &["close", name]);
+    assert!(!close.status.success());
+    assert!(String::from_utf8_lossy(&close.stderr).contains("refs/heads/saved"));
+    assert!(task.join("ops/.git").is_file());
+    ok(&task, "git", &["update-ref", "-d", "refs/heads/saved"]);
+    ok(&ws, WK, &["close", name]);
+}
+
+#[test]
 fn status_compares_the_recorded_start_to_head_and_separates_pending_files() {
     let tmp = tempfile::tempdir().unwrap();
     let ws = fixture(tmp.path());

@@ -21,6 +21,8 @@ just wk status feature/operations
 
 尚未注册项目时，`wk start` 会先提示用 `wk add <url>` 注册项目。没有活跃任务时，`wk run` 会提示用 `wk start` 发起任务。
 
+`wk start` 会在 `tasks/<task>/.git` 创建一个空的裸仓库，让 Git 和 Codex 将任务目录识别为根目录。请在各项目的 worktree 中查看和提交代码更改。任务根目录下的共享指南、技能和笔记不受 Git 跟踪，`wk close` 会将它们一并删除。
+
 使用 `start` 打印的启动命令开启新的任务会话。用 `just wk --help` 查看全部命令，使用 `-w <目录>` 指定其他工作区。`just clean-dev` 会删除整个本地开发工作区，包括其中的 Git 数据。
 
 ## 修改入口
