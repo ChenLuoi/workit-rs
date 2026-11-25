@@ -55,3 +55,5 @@ cargo package --locked --registry crates-io
 1. 在 GitHub 的 `release` environment 配置 `CARGO_REGISTRY_TOKEN` 和 `NPM_TOKEN`。首发前需验证 crates.io 账号邮箱，并授予令牌创建 `workit-rs` 的权限。npm 发布账号需要无 scope 主包和 `@workit-rs` 下七个平台包的公开发布权限。使用令牌的 CI 发布方式需要具有写权限且启用 Bypass 2FA 的 granular token。
 2. 对齐 `Cargo.toml`、`Cargo.lock`、`package.json` 的版本及所有可选依赖版本。手动运行 Release workflow 可验证版本、构建矩阵和打包产物。
 3. 在通过验证的提交上推送相应的标签（例如 `v0.1.0`）。发布会等待三个系统的 CI 以及七个目标的安装验证通过，其中 musl 产物在 Alpine 运行。npm 先发布平台包，最后发布主包。若发布作业失败，在同一次运行中重试失败的作业即可复用原始产物。
+
+演练还会对全部八个 npm 归档执行发布脚本的 dry-run。如果需要在后续提交中修正发布脚本，可在默认分支手动运行 Release，并将 `npm_run_id` 设为原标签运行的 ID。补发流程验证标签提交和构建结果，再发布原始 npm 归档。默认分支当前的包版本须与标签一致。

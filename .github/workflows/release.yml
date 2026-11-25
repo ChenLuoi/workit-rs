@@ -3,6 +3,11 @@ on:
   push:
     tags: ['v*']
   workflow_dispatch:
+    inputs:
+      npm_run_id:
+        description: Retry npm publication from a verified tag run (empty for a build rehearsal)
+        type: string
+        required: false
 permissions:
   contents: read
 concurrency:
@@ -11,8 +16,10 @@ concurrency:
 
 jobs:
   ci:
+    if: ${{ !inputs.npm_run_id }}
     uses: ./.github/workflows/ci.yml
   validate:
+    if: ${{ !inputs.npm_run_id }}
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.targets.outputs.matrix }}
@@ -79,8 +86,24 @@ jobs:
           path: dist/*.tgz
           if-no-files-found: error
 
+  npm-check:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: npm-*
+          merge-multiple: true
+          path: dist
+      - run: node scripts/publish-npm.mjs dist --dry-run
+
   crates-io:
-    needs: [ci, build]
+    needs: [ci, npm-check]
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     environment: release
@@ -92,8 +115,14 @@ jobs:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
   npmjs:
-    needs: [ci, build]
-    if: github.event_name == 'push'
+    needs: [ci, npm-check]
+    if: >-
+      always() && !cancelled() &&
+      ((github.event_name == 'push' && needs.ci.result == 'success' && needs.npm-check.result == 'success') ||
+       (github.event_name == 'workflow_dispatch' && inputs.npm_run_id != '' && github.ref_name == github.event.repository.default_branch))
+    permissions:
+      contents: read
+      actions: read
     runs-on: ubuntu-latest
     environment: release
     steps:
@@ -103,11 +132,32 @@ jobs:
           node-version: '24'
           registry-url: https://registry.npmjs.org
           package-manager-cache: false
+      - name: Verify the original tagged build for npm recovery
+        if: inputs.npm_run_id
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ inputs.npm_run_id }}
+        run: |
+          [[ "$RUN_ID" =~ ^[0-9]+$ ]]
+          tag="v$(node -p "require('./package.json').version")"
+          commit=$(gh api "repos/$GITHUB_REPOSITORY/commits/$tag" --jq .sha)
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID" |
+            jq -e --arg tag "$tag" --arg sha "$commit" --arg repo "$GITHUB_REPOSITORY" '
+              .path == ".github/workflows/release.yml" and .event == "push" and
+              .head_repository.full_name == $repo and .head_branch == $tag and .head_sha == $sha'
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/jobs?per_page=100" |
+            jq -e '.jobs | ([.[] | select(.name == "validate" and .conclusion == "success")] | length == 1) and
+              ([.[] | select(.name | startswith("build ("))] | length == 7 and all(.conclusion == "success")) and
+              ([.[] | select(.name | startswith("ci / cli ("))] | length == 3 and all(.conclusion == "success"))'
       - uses: actions/download-artifact@v8
         with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.npm_run_id || github.run_id }}
           pattern: npm-*
           merge-multiple: true
           path: dist
+      - if: inputs.npm_run_id
+        run: node scripts/publish-npm.mjs dist --dry-run
       - run: node scripts/publish-npm.mjs dist
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

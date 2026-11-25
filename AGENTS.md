@@ -43,3 +43,5 @@ Keep ordinary clones in `repos/` as read-only baseline snapshots. Show the actua
 Keep workit-rs user documentation in matched English (`NAME.md`) and Simplified Chinese (`NAME.zh-CN.md`) files with reciprocal relative links. Update both when commands or examples change. Generated workspaces have a single English README. Agent guides and bundled skills are also in English.
 
 For a release, align the versions in `Cargo.toml`, `Cargo.lock`, `package.json`, and its optional dependencies. Run `node scripts/npm-package.mjs check`. Dispatch the Release workflow on the candidate commit's branch to exercise CI and install all seven packaged targets, including the musl builds in Alpine. A matching `v<version>` tag runs the same checks before publishing with `CARGO_REGISTRY_TOKEN` and `NPM_TOKEN` from the GitHub `release` environment.
+
+Exercise `scripts/publish-npm.mjs` with `--dry-run` against the built archives. To retry after changing publisher code, dispatch Release on the default branch with the original verified tag run's `npm_run_id`. Preserve the original tarballs and published tag.
