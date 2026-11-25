@@ -1,13 +1,16 @@
 name: CI
 on:
-  push:
-    branches: ['**']
   pull_request:
+    types: [opened, synchronize, reopened, closed]
   workflow_call:
 permissions:
   contents: read
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' && github.event.action != 'closed' }}
 jobs:
   cli:
+    if: github.event.action != 'closed' || (github.event.pull_request.merged && github.base_ref == 'master')
     strategy:
       fail-fast: false
       matrix:
@@ -15,11 +18,14 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.merged && github.event.pull_request.merge_commit_sha || github.sha }}
       - run: rustup toolchain install 1.94.0 --profile minimal --component rustfmt,clippy
-      - run: cargo +1.94.0 fmt --check
-      - run: cargo +1.94.0 clippy --locked --all-targets -- -D warnings
-      - run: cargo +1.94.0 test --locked
-      - run: cargo +1.94.0 build --release --locked
+      - if: runner.os == 'Linux'
+        run: cargo +1.94.0 fmt --check
+      - run: cargo +1.94.0 clippy --locked --release --all-targets -- -D warnings
+      # Integration tests build the release binary used by both smoke tests below.
+      - run: cargo +1.94.0 test --release --locked
       - uses: actions/setup-node@v6
         with:
           node-version: '24'
