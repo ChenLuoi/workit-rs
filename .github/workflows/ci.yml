@@ -4,7 +4,11 @@ permissions:
   contents: read
 jobs:
   cli:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
       - run: rustup toolchain install 1.94.0 --profile minimal --component rustfmt,clippy
@@ -16,5 +20,7 @@ jobs:
         with:
           node-version: '24'
           package-manager-cache: false
-      - run: node scripts/smoke-interactive.mjs target/release/wk
-      - run: bash scripts/smoke-npm.sh
+      - if: runner.os != 'Windows'
+        run: node scripts/smoke-interactive.mjs target/release/wk
+      - shell: bash
+        run: bash scripts/smoke-npm.sh "target/release/wk${{ runner.os == 'Windows' && '.exe' || '' }}"
