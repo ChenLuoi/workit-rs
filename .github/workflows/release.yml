@@ -10,6 +10,8 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
   validate:
     runs-on: ubuntu-latest
     outputs:
@@ -61,6 +63,16 @@ jobs:
           "$binary" --version
           node scripts/npm-package.mjs stage "${{ matrix.target }}" "$binary" dist/platform
           npm pack ./dist/platform --pack-destination dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: npm-main
+          path: dist/launcher
+      - if: "!endsWith(matrix.target, '-musl')"
+        run: bash scripts/test-npm-artifacts.sh dist/launcher/*.tgz dist/*.tgz
+      - if: endsWith(matrix.target, '-musl')
+        run: |
+          docker run --rm -v "$PWD:/workspace:ro" -w /workspace node:24-alpine \
+            sh -ec 'apk add --no-cache bash git && bash scripts/test-npm-artifacts.sh dist/launcher/*.tgz dist/*.tgz'
       - uses: actions/upload-artifact@v4
         with:
           name: npm-${{ matrix.target }}
@@ -68,18 +80,19 @@ jobs:
           if-no-files-found: error
 
   crates-io:
-    needs: build
+    needs: [ci, build]
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     environment: release
     steps:
       - uses: actions/checkout@v7
-      - run: cargo publish --locked --registry crates-io
+      - run: rustup toolchain install 1.94.0 --profile minimal
+      - run: cargo +1.94.0 publish --locked --registry crates-io
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
   npmjs:
-    needs: build
+    needs: [ci, build]
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     environment: release

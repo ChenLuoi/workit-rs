@@ -25,6 +25,7 @@ switch (cmd) {
     assert.ok(crate?.targets.some(t => t.kind.includes('bin') && t.name === 'wk'));
     assert.equal(pkg.name, crate.name);
     assert.equal(pkg.version, crate.version);
+    assert.equal(pkg.repository.url, 'git+' + crate.repository + '.git');
     assert.equal(pkg.bin.wk, 'bin/wk.cjs');
     assert.deepEqual(pkg.optionalDependencies, Object.fromEntries(targets.map(t => [platformName(t.target), pkg.version])));
     if (arg) assert.equal(arg, 'v' + pkg.version, 'tag must match Cargo and npm versions');
@@ -38,7 +39,7 @@ switch (cmd) {
     assert.ok(target && binary && dest, 'usage: stage <target> <built-binary> <package-dir>');
     const [os, cpu, abi] = target.target.split('-');
     const manifest = {
-      name: platformName(arg), version: pkg.version, license: pkg.license,
+      name: platformName(arg), version: pkg.version, license: pkg.license, repository: pkg.repository,
       description: pkg.description + ' (' + arg + ')',
       os: [os], cpu: [cpu], files: ['bin/', 'LICENSE'],
       ...(os === 'linux' && {libc: [abi === 'gnu' ? 'glibc' : 'musl']}),

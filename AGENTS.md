@@ -2,10 +2,6 @@
 
 `wk` creates one Git worktree per participating project and groups them in a task directory. Implement workspace behavior in Rust. Use Node.js or shell for project scripts. The npm launcher delegates to the same binary. Both distribution channels use the package name `workit-rs`.
 
-## Pre-release compatibility
-
-The project has no public release or external users. Breaking changes to commands, configuration, task records, and directory layouts are acceptable. Developers may discard their own local workspaces and initialize fresh ones. Skip legacy readers, migrations, and compatibility tests. Continue to protect local Git data and support recovery of interrupted operations in the current format. Remove this policy before the first public release.
-
 ## Run from source
 
 Use Rust 1.94 or later, Cargo, and Git. From the repository root, run `cargo run --locked -- <args>` or `just wk <args>`. Use `just wk --help` for the command inventory and `just wk <command> --help` for its arguments.
@@ -46,4 +42,4 @@ Keep ordinary clones in `repos/` as read-only baseline snapshots. Show the actua
 
 Keep workit-rs user documentation in matched English (`NAME.md`) and Simplified Chinese (`NAME.zh-CN.md`) files with reciprocal relative links. Update both when commands or examples change. Generated workspaces have a single English README. Agent guides and bundled skills are also in English.
 
-For a release, align the versions in `Cargo.toml`, `Cargo.lock`, `package.json`, and its optional dependencies. Run `node scripts/npm-package.mjs check`. Manual dispatch of the Release workflow builds and packages every target. Pushing a matching `v<version>` tag triggers publication using `CARGO_REGISTRY_TOKEN` and `NPM_TOKEN` from the GitHub `release` environment.
+For a release, align the versions in `Cargo.toml`, `Cargo.lock`, `package.json`, and its optional dependencies. Run `node scripts/npm-package.mjs check`. Dispatch the Release workflow on the candidate commit's branch to exercise CI and install all seven packaged targets, including the musl builds in Alpine. A matching `v<version>` tag runs the same checks before publishing with `CARGO_REGISTRY_TOKEN` and `NPM_TOKEN` from the GitHub `release` environment.

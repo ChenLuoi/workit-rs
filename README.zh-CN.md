@@ -4,6 +4,8 @@
 
 本仓库用于开发 Rust 命令行工具 `wk`，它让一个任务可以涉及多个 Git 项目。工作区会话负责选择项目和发起任务。用户随后在任务目录中开启新的 agent 或编辑器会话，每个参与项目都有独立的 Git worktree。
 
+可以用 `cargo install workit-rs --locked` 或 `npm install -g workit-rs` 安装。两个渠道都提供 `wk` 命令，工作区操作需要 Git。
+
 ## 从源码开发
 
 需要 Rust 1.94 或更高版本和 Git，可以选用 `just`。使用 `cargo run --locked -- <参数>` 或 `just wk <参数>` 运行本地构建。仓库将 `WK_WORKSPACE` 指向已忽略的 `.wk-dev/`，Cargo 产物在 `target/`，自动化测试使用独立的临时工作区。
@@ -50,6 +52,6 @@ cargo package --locked --registry crates-io
 
 两个渠道的主包均为 `workit-rs`。crates.io 提供源码，npm 主包通过可选依赖选择预编译二进制。平台包使用 `@workit-rs/<平台>`，覆盖 Linux x64/arm64（glibc 和 musl）、macOS x64/arm64 和 Windows x64。
 
-1. 在 GitHub 的 `release` environment 配置 `CARGO_REGISTRY_TOKEN` 和 `NPM_TOKEN`。npm 发布账号需要主包和 `@workit-rs` scope 下各平台包的公开发布权限。
+1. 在 GitHub 的 `release` environment 配置 `CARGO_REGISTRY_TOKEN` 和 `NPM_TOKEN`。首发前需验证 crates.io 账号邮箱，并授予令牌创建 `workit-rs` 的权限。npm 发布账号需要无 scope 主包和 `@workit-rs` 下七个平台包的公开发布权限。使用令牌的 CI 发布方式需要具有写权限且启用 Bypass 2FA 的 granular token。
 2. 对齐 `Cargo.toml`、`Cargo.lock`、`package.json` 的版本及所有可选依赖版本。手动运行 Release workflow 可验证版本、构建矩阵和打包产物。
-3. 推送相应的版本标签（例如 `v0.1.0`）触发双渠道发布。所有平台构建成功后才会发布。npm 先发布平台包，最后发布主包。若某个发布作业失败，可在同一次运行中重试失败的作业。
+3. 在通过验证的提交上推送相应的标签（例如 `v0.1.0`）。发布会等待三个系统的 CI 以及七个目标的安装验证通过，其中 musl 产物在 Alpine 运行。npm 先发布平台包，最后发布主包。若发布作业失败，在同一次运行中重试失败的作业即可复用原始产物。

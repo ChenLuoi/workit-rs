@@ -4,6 +4,8 @@ English | [简体中文](README.zh-CN.md)
 
 This repository develops `wk`, a Rust CLI that coordinates tasks across Git repositories. A workspace session selects the projects and starts a task. The user opens a fresh agent or editor session in the task's directory, with one linked worktree per project.
 
+Install the CLI with `cargo install workit-rs --locked` or `npm install -g workit-rs`. Both install the `wk` command and require Git for workspace operations.
+
 ## Develop from source
 
 Use Rust 1.94 or later, Git and optionally `just`. Both `cargo run --locked -- <args>` and `just wk <args>` run the local build. The checkout sets `WK_WORKSPACE` to the ignored `.wk-dev/` directory. Cargo builds into `target/`. Tests create their own temporary workspaces.
@@ -50,6 +52,6 @@ Push and pull-request CI runs on Ubuntu, macOS and Windows. Integration tests cr
 
 Both registries use the package name `workit-rs`. The crate contains the Rust source. The npm launcher selects a prebuilt executable from an optional `@workit-rs/<platform>` package. The release targets are Linux x64 and arm64 (glibc and musl), macOS x64 and arm64, and Windows x64.
 
-1. Set `CARGO_REGISTRY_TOKEN` and `NPM_TOKEN` in the GitHub `release` environment. The npm account needs permission to publish the main package and the public platform packages under `@workit-rs`.
+1. Set `CARGO_REGISTRY_TOKEN` and `NPM_TOKEN` in the GitHub `release` environment. For the first release, verify the crates.io account email and grant the token permission to create `workit-rs`. The npm publishing account needs access to the unscoped launcher and all seven public packages under `@workit-rs`. Token-based CI publishing uses a granular write token with 2FA bypass.
 2. Keep the version in `Cargo.toml`, `Cargo.lock`, and `package.json` in sync, including all optional dependency versions. Run the Release workflow manually to check the metadata, build matrix, and packages.
-3. Push a matching tag such as `v0.1.0` to publish to both registries after all platform builds succeed. npm publishes the platform packages first and the launcher last. If a publishing job fails, rerun the failed jobs in the same workflow run.
+3. Push a matching tag such as `v0.1.0` on the tested commit. Publication waits for three-system CI and installation of the seven packaged targets. The musl binaries run in Alpine. npm publishes the platform packages first and the launcher last. If a publishing job fails, rerun the failed jobs in the same workflow run to reuse the original artifacts.

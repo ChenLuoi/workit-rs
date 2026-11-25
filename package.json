@@ -3,6 +3,10 @@
   "version": "0.1.0",
   "description": "A multi-repository Git workspace and task worktree manager",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ChenLuoi/workit-rs.git"
+  },
   "bin": {
     "wk": "bin/wk.cjs"
   },
