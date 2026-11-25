@@ -1,6 +1,6 @@
 {
   "name": "workit-rs",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "A multi-repository Git workspace and task worktree manager",
   "license": "MIT",
   "repository": {
@@ -25,12 +25,12 @@
     "access": "public"
   },
   "optionalDependencies": {
-    "@workit-rs/linux-x64-gnu": "0.1.0",
-    "@workit-rs/linux-arm64-gnu": "0.1.0",
-    "@workit-rs/linux-x64-musl": "0.1.0",
-    "@workit-rs/linux-arm64-musl": "0.1.0",
-    "@workit-rs/darwin-x64": "0.1.0",
-    "@workit-rs/darwin-arm64": "0.1.0",
-    "@workit-rs/win32-x64-msvc": "0.1.0"
+    "@workit-rs/linux-x64-gnu": "0.1.1",
+    "@workit-rs/linux-arm64-gnu": "0.1.1",
+    "@workit-rs/linux-x64-musl": "0.1.1",
+    "@workit-rs/linux-arm64-musl": "0.1.1",
+    "@workit-rs/darwin-x64": "0.1.1",
+    "@workit-rs/darwin-arm64": "0.1.1",
+    "@workit-rs/win32-x64-msvc": "0.1.1"
   }
 }
