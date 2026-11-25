@@ -24,7 +24,12 @@ jobs:
         with:
           node-version: '24'
           package-manager-cache: false
+      - if: runner.os == 'macOS'
+        run: command -v socat || brew install socat
+      - if: runner.os == 'Linux'
+        run: command -v socat || (sudo apt-get update && sudo apt-get install -y socat)
       - if: runner.os != 'Windows'
+        timeout-minutes: 4
         run: node scripts/smoke-interactive.mjs target/release/wk
       - shell: bash
         run: bash scripts/smoke-npm.sh "target/release/wk${{ runner.os == 'Windows' && '.exe' || '' }}"

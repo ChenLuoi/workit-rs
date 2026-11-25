@@ -48,7 +48,7 @@ just smoke-npm
 cargo package --locked --registry crates-io
 ```
 
-Push and pull-request CI runs on Ubuntu, macOS and Windows. Integration tests create real Git repositories in temporary directories. On Linux and macOS, `just smoke-interactive` uses Node.js 20+ and the system `script` utility to exercise the prompts for initializing workspaces, adding projects, starting tasks and configuring and launching tools. `just smoke-npm` packs the host binary and the launcher separately, installs them offline into a temporary npm prefix, and checks the version and workspace initialization.
+Push and pull-request CI runs on Ubuntu, macOS and Windows. Integration tests create real Git repositories in temporary directories. On Linux and macOS, `just smoke-interactive` uses Node.js 20+ and `socat` to exercise the prompts for initializing workspaces, adding projects, starting tasks and configuring and launching tools. `just smoke-npm` packs the host binary and the launcher separately, installs them offline into a temporary npm prefix, and checks the version and workspace initialization.
 
 Both registries use the package name `workit-rs`. The crate contains the Rust source. The npm launcher selects a prebuilt executable from an optional `@workit-rs/<platform>` package. The release targets are Linux x64 and arm64 (glibc and musl), macOS x64 and arm64, and Windows x64.
 

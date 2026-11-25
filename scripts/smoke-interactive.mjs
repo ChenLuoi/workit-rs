@@ -18,7 +18,7 @@ const env = {
   CLICOLOR_FORCE: '0',
 };
 delete env.NO_COLOR;
-const root = realpathSync(mkdtempSync(join(tmpdir(), 'wk-interactive-')));
+const root = realpathSync(mkdtempSync(join(process.platform === 'darwin' ? '/tmp' : tmpdir(), 'wk-interactive-')));
 const space = join(root, "wk's workspace");
 const repo = join(root, 'sample');
 const bin = join(root, 'bin');
@@ -36,12 +36,12 @@ function commit(message) {
 async function interact(args, steps = [], expectedCode = 0, workspace = space, cols = 120) {
   const command = ['env', 'PATH=' + bin, wk, '-w', workspace, ...args]
     .map(arg => "'" + arg.replaceAll("'", "'\\''") + "'").join(' ');
-  // Report wk's exit status inside the PTY on both BSD and util-linux script.
+  // Run each command in a controlling terminal with a known size.
   const session = `stty rows 30 cols ${cols} && ${command}; printf '\\nWK_EXIT=%s\\n' "$?"`;
-  // Darwin's script accepts a pipe for stdin, but rejects Node's socketpair.
-  const child = process.platform === 'darwin'
-    ? spawn('/bin/sh', ['-c', 'cat | /usr/bin/script -q /dev/null /bin/sh -c "$1"', 'wk-pty', session], { env, timeout: 15_000 })
-    : spawn('script', ['-q', '-c', session, '/dev/null'], { env, timeout: 15_000 });
+  writeFileSync(join(root, 'session.sh'), session + '\n');
+  const child = spawn('socat', ['STDIO', 'EXEC:/bin/sh session.sh,pty,setsid,ctty,stderr'], {
+    env, cwd: root, timeout: 15_000, killSignal: 'SIGKILL',
+  });
   let log = '';
   let diagnostic = '';
   let offset = 0;
@@ -58,7 +58,7 @@ async function interact(args, steps = [], expectedCode = 0, workspace = space, c
     }
   });
   const [code, signal] = await once(child, 'close');
-  assert.equal(code, 0, `script exited (${signal || code})\n${diagnostic}\n${log}`);
+  assert.equal(code, 0, `PTY exited (${signal || code}) during ${args.join(' ')}\n${diagnostic}\n${log}`);
   assert.equal(next, steps.length, `Missing prompt: ${steps[next]?.[0]}\n${log}`);
   assert.equal(log.match(/\nWK_EXIT=(\d+)\r?\n/)?.[1], String(expectedCode), log);
   return log;

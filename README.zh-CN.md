@@ -48,7 +48,7 @@ just smoke-npm
 cargo package --locked --registry crates-io
 ```
 
-推送和拉取请求的 CI 覆盖 Ubuntu、macOS 和 Windows。集成测试在临时目录创建真实 Git 仓库。在 Linux 和 macOS 上，`just smoke-interactive` 使用 Node.js 20+ 和系统的 `script` 命令，模拟初始化工作区、添加项目、启动任务、配置和选择启动工具时的键盘交互。`just smoke-npm` 将本机二进制与 npm 启动器分别打包，使用临时 npm 前缀离线验证安装、版本和工作空间初始化。
+推送和拉取请求的 CI 覆盖 Ubuntu、macOS 和 Windows。集成测试在临时目录创建真实 Git 仓库。在 Linux 和 macOS 上，`just smoke-interactive` 使用 Node.js 20+ 和 `socat`，模拟初始化工作区、添加项目、启动任务、配置和选择启动工具时的键盘交互。`just smoke-npm` 将本机二进制与 npm 启动器分别打包，使用临时 npm 前缀离线验证安装、版本和工作空间初始化。
 
 两个渠道的主包均为 `workit-rs`。crates.io 提供源码，npm 主包通过可选依赖选择预编译二进制。平台包使用 `@workit-rs/<平台>`，覆盖 Linux x64/arm64（glibc 和 musl）、macOS x64/arm64 和 Windows x64。
 

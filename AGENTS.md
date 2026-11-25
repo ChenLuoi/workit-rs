@@ -35,7 +35,7 @@ Keep ordinary clones in `repos/` as read-only baseline snapshots. Show the actua
 
 - Exercise CLI behavior in `tests/cli.rs` using the built binary and temporary local Git repositories. Run a single scenario with `cargo test --locked --test cli <test_name>`.
 - CI runs on Ubuntu, macOS and Windows. Run `just check` for formatting, Clippy, and tests. The equivalent commands are `cargo fmt --check`, `cargo clippy --locked --all-targets -- -D warnings`, and `cargo test --locked`.
-- For interactive `init`, `add`, `clone`, `start`, `config`, or `run` changes, run `just smoke-interactive` on Linux or macOS with Node.js 20+ and the system `script` utility. It builds the debug binary, drives the prompts against local repositories, and checks the selected commits in each worktree.
+- For interactive `init`, `add`, `clone`, `start`, `config`, or `run` changes, run `just smoke-interactive` on Linux or macOS with Node.js 20+ and `socat`. It builds the debug binary, drives the prompts against local repositories, and checks the selected commits in each worktree.
 - For npm launcher or packaging changes, use Node.js 20 or later, npm, and Bash. Run `just smoke-npm` to build and exercise both local tarballs. To inspect the crate contents before committing, use `cargo package --locked --allow-dirty --list`.
 
 ## Documentation and release
