@@ -1,11 +1,8 @@
 use anyhow::{Context, Result, bail, ensure};
-use indicatif::ProgressBar;
 use std::{
     collections::BTreeMap,
-    io::{self, IsTerminal},
     path::{Path, PathBuf},
     process::{Command, Output, Stdio},
-    time::Duration,
 };
 
 pub fn path_arg(path: &Path) -> Result<&str> {
@@ -66,17 +63,7 @@ pub fn git(dir: &Path, args: &[&str]) -> Result<String> {
 }
 
 pub fn git_with_progress(dir: &Path, args: &[&str], message: String) -> Result<String> {
-    if !io::stderr().is_terminal() {
-        return git(dir, args);
-    }
-    let spinner = ProgressBar::new_spinner().with_message(message);
-    if !spinner.is_hidden() {
-        spinner.tick();
-        spinner.enable_steady_tick(Duration::from_millis(100));
-    }
-    let result = git(dir, args);
-    spinner.finish_and_clear();
-    result
+    crate::prompt::progress(&message, || git(dir, args))
 }
 
 pub fn fetch_origin(repo: &Path, name: &str) -> Result<()> {
@@ -86,6 +73,106 @@ pub fn fetch_origin(repo: &Path, name: &str) -> Result<()> {
         format!("Fetching {name} from origin"),
     )?;
     Ok(())
+}
+
+pub fn resolve_base(repo: &Path, base: &str) -> Result<String> {
+    let reference = if base.starts_with("origin/") {
+        format!("refs/remotes/{base}")
+    } else {
+        base.to_owned()
+    };
+    git(
+        repo,
+        &[
+            "rev-parse",
+            "--verify",
+            "--end-of-options",
+            &format!("{reference}^{{commit}}"),
+        ],
+    )
+    .with_context(|| format!("cannot resolve base {base} in {}", repo.display()))
+}
+
+pub fn refresh_snapshot(repo: &Path, base: &str) -> Result<()> {
+    if git(
+        repo,
+        &["for-each-ref", "--count=1", "--format=%(objectname)"],
+    )?
+    .is_empty()
+    {
+        return Ok(()); // An empty remote has no commit to check out yet.
+    }
+    let commit = resolve_base(repo, base)?;
+    let index = bytes(repo, &["ls-files", "-v", "--stage", "-z"])?;
+    check_index_flags(&index)?;
+    // Keep both the previous and intended HEAD identifiable if checkout is interrupted.
+    let head = git(repo, &["rev-parse", "--revs-only", "HEAD"])?;
+    let pending = git(
+        repo,
+        &[
+            "for-each-ref",
+            "--format=%(objectname)",
+            "refs/wk/next-snapshot",
+        ],
+    )?;
+    if !head.is_empty() && head == pending {
+        git(repo, &["update-ref", "refs/wk/snapshot", &head])?;
+    }
+    if head != commit {
+        // A removed or replaced gitlink can contain an independent repository.
+        for path in populated_gitlinks(repo, &index)? {
+            let entry = bytes(
+                repo,
+                &["--literal-pathspecs", "ls-tree", "-z", &commit, "--", &path],
+            )?;
+            ensure!(
+                entry.starts_with(b"160000 "),
+                "preserve populated submodule {path} before syncing"
+            );
+        }
+    }
+    git(repo, &["update-ref", "refs/wk/next-snapshot", &commit])?;
+    git(
+        repo,
+        &[
+            "switch",
+            "--detach",
+            "--no-overwrite-ignore",
+            "--no-recurse-submodules",
+            &commit,
+        ],
+    )?;
+    git(repo, &["update-ref", "refs/wk/snapshot", &commit])?;
+    git(repo, &["update-ref", "-d", "refs/wk/next-snapshot"])?;
+    Ok(())
+}
+
+fn check_index_flags(index: &[u8]) -> Result<()> {
+    ensure!(
+        !index
+            .split(|b| *b == 0)
+            .filter_map(|entry| entry.first())
+            .any(|flag| *flag == b'S' || flag.is_ascii_lowercase()),
+        "reference clone contains skip-worktree or assume-unchanged files"
+    );
+    Ok(())
+}
+
+fn populated_gitlinks(repo: &Path, index: &[u8]) -> Result<Vec<String>> {
+    let mut paths = Vec::new();
+    for entry in index
+        .split(|b| *b == 0)
+        .filter(|e| e.get(1..).is_some_and(|s| s.starts_with(b" 160000 ")))
+    {
+        let (_, path) = std::str::from_utf8(entry)?
+            .split_once('\t')
+            .context("missing submodule path in the Git index")?;
+        let sub = repo.join(path);
+        if sub.try_exists()? && sub.read_dir()?.next().is_some() {
+            paths.push(path.to_owned());
+        }
+    }
+    Ok(paths)
 }
 
 /// Short branch names with the advertised default first. Scripts only need HEAD.
@@ -172,25 +259,13 @@ pub fn check_clone_removal(repo: &Path) -> Result<()> {
         repo.display()
     );
     let index = bytes(repo, &["ls-files", "-v", "--stage", "-z"])?;
-    for entry in index.split(|b| *b == 0).filter(|entry| !entry.is_empty()) {
-        let flag = entry[0];
-        ensure!(
-            flag != b'S' && !flag.is_ascii_lowercase(),
-            "{} has skip-worktree or assume-unchanged files; restore normal index checks before removal",
-            repo.display()
-        );
-        // A gitlink can hold an independent clone with no entry in .git/modules.
-        if entry[1..].starts_with(b" 160000 ") {
-            let (_, path) = std::str::from_utf8(entry)?
-                .split_once('\t')
-                .context("missing submodule path in the Git index")?;
-            let submodule = repo.join(path);
-            ensure!(
-                !submodule.try_exists()? || submodule.read_dir()?.next().is_none(),
-                "submodule {path} contains local data; preserve it before removal"
-            );
-        }
-    }
+    check_index_flags(&index)?;
+    let populated = populated_gitlinks(repo, &index)?;
+    ensure!(
+        populated.is_empty(),
+        "preserve populated submodules before removal: {}",
+        populated.join(", ")
+    );
     let commit = git(
         repo,
         &[
@@ -222,6 +297,11 @@ pub fn check_root(path: &Path) -> Result<()> {
 
 pub fn validate_tree(repo: &Path, tree: &Path, branch: &str) -> Result<()> {
     check_root(tree)?;
+    check_tree_repository(repo, tree)?;
+    check_tree_branch(tree, branch)
+}
+
+pub fn check_tree_repository(repo: &Path, tree: &Path) -> Result<()> {
     let common = git(
         tree,
         &["rev-parse", "--path-format=absolute", "--git-common-dir"],
@@ -231,7 +311,16 @@ pub fn validate_tree(repo: &Path, tree: &Path, branch: &str) -> Result<()> {
         "wrong repository at {}",
         tree.display()
     );
-    let actual = git(tree, &["rev-parse", "--abbrev-ref", "HEAD"])?;
+    Ok(())
+}
+
+pub fn check_tree_branch(tree: &Path, branch: &str) -> Result<()> {
+    let actual = git(tree, &["branch", "--show-current"])?;
+    let actual = if actual.is_empty() {
+        "(detached)"
+    } else {
+        &actual
+    };
     ensure!(
         actual == branch,
         "{} is on {actual}, expected {branch}",

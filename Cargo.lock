@@ -153,6 +153,7 @@ checksum = "e96a4956774c13c126a8b5af4daa79384f4d826534c95a02d76afb39e2ab64e3"
 dependencies = [
  "encode_unicode",
  "libc",
+ "unicode-width",
  "windows-sys",
 ]
 
@@ -752,8 +753,10 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "console",
  "indicatif",
  "inquire",
+ "rustix",
  "serde",
  "serde-saphyr",
  "serde_json",

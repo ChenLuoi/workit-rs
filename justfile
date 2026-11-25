@@ -6,12 +6,16 @@ default:
 wk *args:
     cargo run --locked -- "$@"
 
+# Delete the local development workspace, including all its clones and tasks.
+clean-dev:
+    rm -rf -- .wk-dev
+
 check:
     cargo fmt --check
     cargo clippy --locked --all-targets -- -D warnings
     cargo test --locked
 
-# Drive interactive add and start in a temporary workspace.
+# Exercise workspace, project, task and tool selection prompts in a temporary workspace.
 smoke-interactive:
     cargo build --locked
     node scripts/smoke-interactive.mjs target/debug/wk

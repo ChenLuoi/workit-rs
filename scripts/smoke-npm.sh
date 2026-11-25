@@ -15,5 +15,10 @@ launcher=$(npm pack --silent --pack-destination "$tmp")
 npm install --offline --ignore-scripts --no-audit --no-fund --prefix "$tmp/client" "$tmp/$platform" "$tmp/$launcher"
 wk="$tmp/client/node_modules/.bin/wk"
 [[ $("$wk" --version) == "wk $version" ]]
-"$wk" -w "$tmp/test workspace" init
+git init -q -b main "$tmp/project"
+git -C "$tmp/project" -c user.name=test -c user.email=test@example.org commit -qm initial --allow-empty
+"$wk" -w "$tmp/test workspace" init --yes --url "$tmp/project" --skills wk-cli
+cmp templates/workspace/README.md "$tmp/test workspace/README.md"
+cmp templates/workspace/.agents/skills/wk-cli/SKILL.md "$tmp/test workspace/.agents/skills/wk-cli/SKILL.md"
+[[ ! -e "$tmp/test workspace/README.zh-CN.md" ]]
 "$wk" -w "$tmp/test workspace" doctor

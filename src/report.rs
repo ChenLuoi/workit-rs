@@ -1,15 +1,19 @@
+pub(crate) mod doctor;
+mod render;
+
 use crate::{
-    git::{bytes, fetch_origin, git, validate_tree},
-    tasks::{Phase, branch},
-    workspace::{Workspace, child},
+    git::{bytes, check_root, check_tree_repository, fetch_origin, git},
+    tasks::{Member, Phase, Task},
+    workspace::{Config, Project, Workspace, child},
 };
 use anyhow::{Context, Result, ensure};
 use serde::Serialize;
-use std::{collections::BTreeMap, fs, path::Path};
+use std::{collections::BTreeMap, path::Path};
 
 #[derive(Default, Serialize)]
 struct Checkout {
     branch: String,
+    commit: Option<String>,
     upstream: Option<String>,
     ahead: Option<usize>,
     behind: Option<usize>,
@@ -17,12 +21,42 @@ struct Checkout {
     modified: usize,
     untracked: usize,
     conflicts: usize,
+    #[serde(skip)]
+    ignored: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
-    reference_issue: Option<String>,
+    files: Option<Vec<ChangedFile>>,
 }
 
-fn checkout(dir: &Path, reference: bool) -> Result<Checkout> {
-    let mut state = Checkout::default();
+#[derive(Serialize)]
+struct ChangedFile {
+    status: String,
+    path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    original_path: Option<String>,
+}
+
+impl ChangedFile {
+    fn new(status: &[u8], path: &[u8], original_path: Option<&[u8]>) -> Self {
+        Self {
+            status: String::from_utf8_lossy(status).into_owned(),
+            path: String::from_utf8_lossy(path).into_owned(),
+            original_path: original_path.map(|s| String::from_utf8_lossy(s).into_owned()),
+        }
+    }
+}
+
+#[derive(PartialEq)]
+enum CheckoutView {
+    Reference,
+    Summary,
+    Detail,
+}
+
+fn checkout(dir: &Path, view: CheckoutView) -> Result<Checkout> {
+    let mut state = Checkout {
+        files: (view == CheckoutView::Detail).then(Vec::new),
+        ..Checkout::default()
+    };
     let mut args = vec![
         "--no-optional-locks",
         "status",
@@ -33,16 +67,16 @@ fn checkout(dir: &Path, reference: bool) -> Result<Checkout> {
         "--untracked-files=all",
         "--ignore-submodules=none",
     ];
-    if reference {
+    if view == CheckoutView::Reference {
         args.push("--ignored=matching");
     }
     let output = bytes(dir, &args)?;
-    let mut ignored = false;
-    let mut unborn = false;
     let mut rows = output.split(|b| *b == 0);
     while let Some(row) = rows.next() {
-        if row == b"# branch.oid (initial)" {
-            unborn = true;
+        if let Some(oid) = row.strip_prefix(b"# branch.oid ") {
+            if oid != b"(initial)" {
+                state.commit = Some(std::str::from_utf8(oid)?.to_owned());
+            }
         } else if let Some(s) = row.strip_prefix(b"# branch.head ") {
             state.branch = String::from_utf8_lossy(s).into_owned();
         } else if let Some(s) = row.strip_prefix(b"# branch.upstream ") {
@@ -54,264 +88,269 @@ fn checkout(dir: &Path, reference: bool) -> Result<Checkout> {
             state.ahead = Some(ahead.parse()?);
             state.behind = Some(behind.parse()?);
         } else {
-            match row.first() {
+            // Porcelain v2 puts the path after a fixed number of space-delimited
+            // fields. With -z a rename's original path is the next record.
+            let (status, fields, original) = match row.first() {
                 Some(b'1' | b'2') => {
                     state.staged += usize::from(row[2] != b'.');
                     state.modified += usize::from(row[3] != b'.');
                     if row[0] == b'2' {
-                        rows.next();
-                    } // original path of a rename/copy
+                        (
+                            &row[2..4],
+                            10,
+                            Some(rows.next().context("missing rename source")?),
+                        )
+                    } else {
+                        (&row[2..4], 9, None)
+                    }
                 }
-                Some(b'u') => state.conflicts += 1,
-                Some(b'?') => state.untracked += 1,
-                Some(b'!') => ignored = true,
-                _ => (),
+                Some(b'u') => {
+                    state.conflicts += 1;
+                    (&row[2..4], 11, None)
+                }
+                Some(b'?') => {
+                    state.untracked += 1;
+                    (b"??".as_slice(), 2, None)
+                }
+                Some(b'!') => {
+                    state.ignored += 1;
+                    continue;
+                }
+                _ => continue,
+            };
+            if let Some(files) = &mut state.files {
+                let path = row.splitn(fields, |b| *b == b' ').last().unwrap();
+                files.push(ChangedFile::new(status, path, original));
             }
         }
-    }
-    if reference {
-        let default_branch = git(
-            dir,
-            &[
-                "for-each-ref",
-                "--format=%(symref:lstrip=3)",
-                "refs/remotes/origin/HEAD",
-            ],
-        )?;
-        state.reference_issue =
-            if state.staged + state.modified + state.untracked + state.conflicts > 0 {
-                Some("reference clone has local changes or untracked files".into())
-            } else if ignored {
-                Some("reference clone contains ignored files".into())
-            } else if !default_branch.is_empty() && default_branch != state.branch {
-                Some(format!(
-                    "reference clone is on {}, expected {default_branch}",
-                    state.branch
-                ))
-            } else if !unborn
-                && !git(
-                    dir,
-                    &[
-                        "rev-list",
-                        "--max-count=1",
-                        "HEAD",
-                        "--not",
-                        "--remotes=origin",
-                    ],
-                )?
-                .is_empty()
-            {
-                Some("reference HEAD contains a commit not on a locally known origin branch".into())
-            } else {
-                None
-            };
     }
     Ok(state)
 }
 
-pub(crate) fn check_reference(dir: &Path) -> Result<()> {
-    if let Some(issue) = checkout(dir, true)?.reference_issue {
-        anyhow::bail!(
-            "{}: {issue}; preserve your work and restore the reference clone. Use wk start for development",
-            dir.display()
-        );
-    }
+fn reference_branch(state: &Checkout) -> Result<()> {
+    ensure!(
+        state.commit.is_none() || state.branch == "(detached)",
+        "reference clone is on {}, expected a detached snapshot",
+        state.branch
+    );
     Ok(())
 }
 
-#[derive(Serialize)]
-#[serde(untagged)]
-enum Entry {
-    Ok(Checkout),
-    Error { error: String },
+fn check_reference_head(dir: &Path, head: Option<&str>) -> Result<()> {
+    let saved = git(
+        dir,
+        &[
+            "for-each-ref",
+            "--format=%(objectname)",
+            "refs/wk/snapshot",
+            "refs/wk/next-snapshot",
+        ],
+    )?;
+    ensure!(
+        match head {
+            None => saved.is_empty(),
+            Some(commit) => saved.lines().any(|s| s == commit),
+        },
+        "reference HEAD differs from the saved snapshot"
+    );
+    Ok(())
 }
 
-impl From<Result<Checkout>> for Entry {
-    fn from(result: Result<Checkout>) -> Self {
-        match result {
-            Ok(c) => Entry::Ok(c),
-            Err(e) => Entry::Error {
-                error: format!("{e:#}"),
-            },
-        }
+pub(crate) fn check_reference(dir: &Path) -> Result<()> {
+    let check = || -> Result<()> {
+        let state = checkout(dir, CheckoutView::Reference)?;
+        ensure!(
+            state.staged + state.modified + state.untracked + state.conflicts == 0,
+            "reference clone has local changes or untracked files"
+        );
+        ensure!(state.ignored == 0, "reference clone contains ignored files");
+        reference_branch(&state)?;
+        check_reference_head(dir, state.commit.as_deref())?;
+        Ok(())
+    };
+    check().with_context(|| {
+        format!(
+            "{}: preserve your work and restore the reference clone. Use wk start for development",
+            dir.display()
+        )
+    })
+}
+
+fn committed_changes(tree: &Path, start: &str, head: &str) -> Result<Vec<ChangedFile>> {
+    let mut files = Vec::new();
+    if start == head {
+        return Ok(files);
     }
-}
-
-impl std::fmt::Display for Entry {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Error { error } => write!(f, "ERROR: {error}"),
-            Self::Ok(c) => {
-                write!(
-                    f,
-                    "{} | {} staged, {} modified, {} untracked, {} conflicts",
-                    c.branch, c.staged, c.modified, c.untracked, c.conflicts
-                )?;
-                if let Some(u) = &c.upstream {
-                    write!(f, " | {u}")?;
-                    if let (Some(a), Some(b)) = (c.ahead, c.behind) {
-                        write!(f, " +{a} -{b}")?;
-                    }
-                } else {
-                    write!(f, " | no upstream")?;
-                }
-                if let Some(issue) = &c.reference_issue {
-                    write!(f, " | {issue}")?;
-                }
-                Ok(())
-            }
-        }
+    let output = bytes(
+        tree,
+        &[
+            "diff",
+            "--name-status",
+            "-z",
+            "--find-renames",
+            "--ignore-submodules=none",
+            start,
+            head,
+            "--",
+        ],
+    )?;
+    let mut fields = output.split(|b| *b == 0);
+    while let Some(status) = fields.next().filter(|s| !s.is_empty()) {
+        let first = fields.next().context("missing diff path")?;
+        let (path, original) = if matches!(status.first(), Some(b'R' | b'C')) {
+            (
+                fields.next().context("missing diff destination")?,
+                Some(first),
+            )
+        } else {
+            (first, None)
+        };
+        files.push(ChangedFile::new(status, path, original));
     }
+    Ok(files)
 }
 
 #[derive(Serialize)]
-struct TaskStatus {
-    phase: Phase,
-    projects: BTreeMap<String, Entry>,
+struct ProjectStatus {
+    #[serde(flatten)]
+    project: Project,
+    commit: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
 }
 
 #[derive(Default, Serialize)]
+struct MemberStatus {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    start: Option<Member>,
+    #[serde(flatten)]
+    current: Option<Checkout>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    committed_changes: Option<Vec<ChangedFile>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+#[derive(Serialize)]
 struct Report {
-    projects: BTreeMap<String, Entry>,
-    tasks: BTreeMap<String, TaskStatus>,
+    projects: BTreeMap<String, ProjectStatus>,
+    tasks: BTreeMap<String, Task<MemberStatus>>,
 }
 
 impl Workspace {
-    fn inspect(&self, selected: Option<&str>, fetch: bool) -> Result<Report> {
+    fn task_status(
+        &self,
+        config: &Config,
+        name: &str,
+        task: Task,
+        detail: bool,
+    ) -> Task<MemberStatus> {
+        let mut projects = BTreeMap::new();
+        for (p, member) in task.projects {
+            let mut status = MemberStatus::default();
+            let result = (|| -> Result<()> {
+                let spec = config
+                    .projects
+                    .get(&p)
+                    .with_context(|| format!("unregistered project {p}"))?;
+                let repo = self.verify_repo(&p, spec)?;
+                let tree = child(&self.task_dir(name)?, &p)?;
+                check_root(&tree)?;
+                check_tree_repository(&repo, &tree)?;
+                let view = if detail {
+                    CheckoutView::Detail
+                } else {
+                    CheckoutView::Summary
+                };
+                let current = status.current.insert(checkout(&tree, view)?);
+                if detail && let Some(head) = &current.commit {
+                    status.committed_changes =
+                        Some(committed_changes(&tree, &member.commit, head)?);
+                }
+                ensure!(
+                    current.branch == name,
+                    "on {}, expected {name}",
+                    current.branch
+                );
+                Ok(())
+            })();
+            status.start = detail.then_some(member);
+            status.error = result.err().map(|e| format!("{e:#}"));
+            projects.insert(p, status);
+        }
+        Task {
+            phase: task.phase,
+            skills: task.skills,
+            preset: task.preset,
+            started_at_unix_ms: task.started_at_unix_ms,
+            closing_at_unix_ms: task.closing_at_unix_ms,
+            projects,
+        }
+    }
+
+    fn status_report(&self, selected: Option<&str>, fetch: bool) -> Result<Report> {
         let _lock = if fetch { Some(self.lock()?) } else { None };
-        let config = self.config()?;
-        let mut report = Report::default();
-        let tasks = if let Some(name) = selected {
-            vec![name.to_owned()]
+        let mut config = self.config()?;
+        let mut active = BTreeMap::new();
+        if let Some(name) = selected {
+            let task = self.active_index()?.into_task(name)?;
+            ensure!(
+                task.phase == Phase::Active,
+                "task {name} is {}. Status is available for active tasks only",
+                task.phase
+            );
+            config.projects.retain(|p, _| task.projects.contains_key(p));
+            active.insert(name.to_owned(), task);
         } else {
-            self.task_names()?
-        };
-        let selected_task = selected.map(|t| self.read_task(t)).transpose()?;
-        let projects = config.projects.iter().filter(|(p, _)| {
-            selected_task
-                .as_ref()
-                .is_none_or(|t| t.projects.contains_key(*p))
-        });
-        if fetch {
-            for (p, spec) in projects.clone() {
-                self.verify_clean_repo(p, spec)?;
-            }
-        }
-        for (p, spec) in projects {
-            if fetch {
-                fetch_origin(&self.repo(p)?, p)?;
-            }
-            let result = self
-                .verify_repo(p, spec)
-                .and_then(|repo| checkout(&repo, true));
-            report.projects.insert(p.clone(), result.into());
-        }
-        for name in tasks {
-            let task = self.read_task(&name)?;
-            let mut projects = BTreeMap::new();
-            if task.phase != Phase::Closed {
-                let dir = self.task_dir(&name)?;
-                for p in task.projects.keys() {
-                    let result = (|| {
-                        let spec = config
-                            .projects
-                            .get(p)
-                            .with_context(|| format!("unregistered project {p}"))?;
-                        let repo = self.verify_repo(p, spec)?;
-                        let tree = child(&dir, p)?;
-                        validate_tree(&repo, &tree, &branch(&name))?;
-                        checkout(&tree, false)
-                    })();
-                    projects.insert(p.clone(), result.into());
+            for (name, task) in self.active_index()?.tasks {
+                if task.phase == Phase::Active {
+                    active.insert(name, task);
                 }
             }
-            report.tasks.insert(
+        }
+        if fetch {
+            for (name, spec) in &config.projects {
+                self.verify_clean_repo(name, spec)?;
+            }
+            for name in config.projects.keys() {
+                fetch_origin(&self.repo(name)?, name)?;
+            }
+        }
+        let tasks = active
+            .into_iter()
+            .map(|(name, task)| {
+                let status = self.task_status(&config, &name, task, selected.is_some());
+                (name, status)
+            })
+            .collect();
+        let mut projects = BTreeMap::new();
+        for (name, project) in config.projects {
+            let head = self
+                .verify_repo(&name, &project)
+                .and_then(|repo| git(&repo, &["rev-parse", "--revs-only", "HEAD"]));
+            let (commit, error) = match head {
+                Ok(oid) => (Some(oid).filter(|b| !b.is_empty()), None),
+                Err(e) => (None, Some(format!("{e:#}"))),
+            };
+            projects.insert(
                 name,
-                TaskStatus {
-                    phase: task.phase,
-                    projects,
+                ProjectStatus {
+                    project,
+                    commit,
+                    error,
                 },
             );
         }
-        Ok(report)
+        Ok(Report { projects, tasks })
     }
 
     pub fn status(&self, selected: Option<&str>, json: bool, fetch: bool) -> Result<()> {
-        let report = self.inspect(selected, fetch)?;
+        let report = self.status_report(selected, fetch)?;
         if json {
             println!("{}", serde_json::to_string_pretty(&report)?);
         } else {
-            println!("Projects ({})", report.projects.len());
-            for (name, entry) in report.projects {
-                println!("  {name}: {entry}");
-            }
-            println!("Tasks ({})", report.tasks.len());
-            for (name, task) in report.tasks {
-                println!("  {name} [{}]", task.phase);
-                for (p, entry) in task.projects {
-                    println!("    {p}: {entry}");
-                }
-            }
+            report.print(selected);
         }
-        Ok(())
-    }
-
-    pub fn doctor(&self) -> Result<()> {
-        println!("{}", git(&self.0, &["--version"])?);
-        let report = self.inspect(None, false)?;
-        let mut issues = Vec::new();
-        for (p, entry) in &report.projects {
-            match entry {
-                Entry::Error { error } => issues.push(format!("project {p}: {error}")),
-                Entry::Ok(checkout) => {
-                    if let Some(issue) = &checkout.reference_issue {
-                        issues.push(format!(
-                            "project {p}: {issue}; use wk start for development"
-                        ));
-                    }
-                }
-            }
-        }
-        for (name, task) in &report.tasks {
-            if matches!(task.phase, Phase::Creating | Phase::Closing) {
-                issues.push(format!("task {name}: incomplete ({})", task.phase));
-            }
-            for (p, entry) in &task.projects {
-                if let Entry::Error { error } = entry {
-                    issues.push(format!("{name}/{p}: {error}"));
-                }
-            }
-        }
-        for dir in ["repos", "tasks"] {
-            let root = child(&self.0, dir)?;
-            if !root.is_dir() {
-                issues.push(format!("missing {dir}/"));
-                continue;
-            }
-            for entry in fs::read_dir(root)? {
-                let entry = entry?;
-                let name = entry.file_name().to_string_lossy().into_owned();
-                if dir == "tasks"
-                    && report
-                        .tasks
-                        .get(&name)
-                        .is_some_and(|t| t.phase == Phase::Closed)
-                {
-                    issues.push(format!("directory for closed task: {dir}/{name}"));
-                } else if !(if dir == "repos" {
-                    report.projects.contains_key(&name)
-                } else {
-                    report.tasks.contains_key(&name)
-                }) {
-                    issues.push(format!("unregistered path {dir}/{name}"));
-                }
-            }
-        }
-        for issue in &issues {
-            eprintln!("{issue}");
-        }
-        ensure!(issues.is_empty(), "{} workspace issue(s)", issues.len());
-        println!("Workspace OK: {}", self.0.display());
         Ok(())
     }
 }
@@ -322,7 +361,6 @@ impl std::fmt::Display for Phase {
             Self::Creating => "creating",
             Self::Active => "active",
             Self::Closing => "closing",
-            Self::Closed => "closed",
         })
     }
 }
