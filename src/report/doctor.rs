@@ -3,7 +3,7 @@ mod manifest;
 use super::{CheckoutView, check_reference_head, checkout, reference_branch};
 use crate::{
     git::{check_root, check_tree_branch, check_tree_repository, git},
-    tasks::{Member, Phase, Task},
+    tasks::{Member, Phase, Task, check_task_git_dir},
     workspace::{Project, Workspace, child, name_ok, validate_base, validate_url},
 };
 use anyhow::{Result, ensure};
@@ -158,6 +158,9 @@ fn inspect_task(
             Ok(dir)
         }),
     );
+    if let Some(dir) = dir.as_ref().filter(|_| has_git) {
+        findings.check("Task Git directory", check_task_git_dir(dir));
+    }
     for (p, raw) in task.projects {
         let mut member = Findings::default();
         let valid_name = member.check("Member name", name_ok(&p)).is_some();

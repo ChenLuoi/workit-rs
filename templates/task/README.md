@@ -1,6 +1,6 @@
 # Task {{task}}
 
-Open this directory in a fresh agent or editor session. The worktrees below start on branch `{{task}}`. The recorded refs and commits describe the starting point for this task.
+Open this directory in a fresh agent or editor session. Its empty bare Git repository marks the task root. Run Git commands in the worktrees below, which start on branch `{{task}}`. The recorded refs and commits describe the starting point for this task.
 
 ## Projects
 

@@ -25,11 +25,11 @@ Source each task skill from `task-skills/<id>/SKILL.md` and its adjacent files. 
 
 If no projects are registered, `wk start` prompts you to register the first one with `wk add <url>` before asking for a task name. If there are no active tasks, `wk run` directs you to `wk start`. Once a task is active, give its name to `wk run <task>`.
 
-- `wk start` creates one worktree per selected project, each on a new branch named after the task. A slash in the name groups directories and is preserved in the branch. In a terminal, choose projects with Space and Enter and accept default bases or choose a branch per project. Scripts supply a task name and either projects or a preset. An existing project branch can block creation.
+- `wk start` marks the task root with an empty bare Git repository and creates one worktree per selected project, each on a new branch named after the task. A slash in the name groups directories and is preserved in the branch. In a terminal, choose projects with Space and Enter and accept default bases or choose a branch per project. Scripts supply a task name and either projects or a preset. An existing project branch can block creation.
 - `wk run <task> [--agent <tool>]` opens an enabled, locally available tool at the task root. `--codex` and `--claude` are shortcuts. Omit the tool in a terminal for the picker. Give the user one of the launch commands printed by `start` for a fresh task session.
 - `wk path <task> [project]` prints the absolute path for an editor or launcher.
 - `wk status [task] [--json] [--fetch]` lists registered projects and active tasks. With a task name it shows starting refs and commits, current branches, committed differences and pending files. It reads local state by default. `--fetch` refreshes origin refs while leaving reference checkouts in place.
-- `wk close <task>` checks all member worktrees, removes them through Git and deletes the entire task directory, including shared notes and fixtures. Task branches and the local history record survive. Changed, untracked or ignored files in a member block closing. After an interrupted close, rerun the same command.
+- `wk close <task>` checks all member worktrees, removes them through Git and deletes the entire task directory, including shared notes and fixtures. Task branches and the local history record survive. Changed, untracked or ignored files in a member block closing, as do refs stored in the task root's bare repository. After an interrupted close, rerun the same command.
 
 ## Diagnostics and official skills
 

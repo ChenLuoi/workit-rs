@@ -1,6 +1,6 @@
 # Implement {{task}}
 
-This fresh session owns development for task `{{task}}`. Each directory below is a separate Git worktree with its own instructions, build and checks. Work in the participating directories and commit changes in the project that owns them.
+This fresh session owns development for task `{{task}}`. The bare Git repository here marks the task root. Each directory below is a separate Git worktree with its own instructions, build and checks. Work in the participating directories and commit changes in the project that owns them.
 
 ## Participating projects
 
