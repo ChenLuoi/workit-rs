@@ -50,7 +50,7 @@ just smoke-npm
 cargo package --locked --registry crates-io
 ```
 
-创建、重新打开或更新 PR 时，CI 会在 Ubuntu、macOS 和 Windows 上运行。PR 合并到 `master` 后，CI 会检查实际合入的提交。推送版本标签时，由 Release 工作流调用同一套检查。各平台的集成测试会在临时目录中创建真实 Git 仓库，并构建供冒烟测试复用的 release 二进制。
+创建、重新打开或更新 PR 时，CI 会在 Ubuntu、macOS 和 Windows 上运行。合并 PR 或直接推送到 `master` 时，CI 会在 `master` 分支上检查此次推送的提交。推送版本标签时，由 Release 工作流调用同一套检查。各平台的集成测试会在临时目录中创建真实 Git 仓库，并构建供冒烟测试复用的 release 二进制。
 
 在 Linux 和 macOS 上，`just smoke-interactive` 使用 Node.js 20+ 和 `socat`，模拟初始化工作区、添加项目、启动任务、配置和选择启动工具时的键盘交互。`just smoke-npm` 将本机二进制与 npm 启动器分别打包，使用临时 npm 前缀离线验证安装、版本和工作空间初始化。
 

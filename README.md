@@ -50,7 +50,7 @@ just smoke-npm
 cargo package --locked --registry crates-io
 ```
 
-CI runs on Ubuntu, macOS and Windows when a pull request opens, reopens or receives new commits, and checks the merged commit when a PR lands on `master`. Version tags run the same checks through the Release workflow. Each platform's integration tests create real Git repositories in temporary directories and build the release binary used by the smoke tests.
+CI runs on Ubuntu, macOS and Windows when a pull request opens, reopens or receives new commits. Every push to `master`, including a PR merge, runs CI on that branch for the pushed commit. Version tags run the same checks through the Release workflow. Each platform's integration tests create real Git repositories in temporary directories and build the release binary used by the smoke tests.
 
 On Linux and macOS, `just smoke-interactive` uses Node.js 20+ and `socat` to exercise the prompts for initializing workspaces, adding projects, starting tasks and configuring and launching tools. `just smoke-npm` packs the host binary and the launcher separately, installs them offline into a temporary npm prefix, and checks the version and workspace initialization.
 
