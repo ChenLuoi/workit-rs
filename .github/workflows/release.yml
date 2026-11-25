@@ -29,7 +29,7 @@ jobs:
       - run: cargo test --locked
       - run: cargo package --locked --registry crates-io
       - run: mkdir -p dist && npm pack --pack-destination dist
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: npm-main
           path: dist/*.tgz
@@ -63,17 +63,17 @@ jobs:
           "$binary" --version
           node scripts/npm-package.mjs stage "${{ matrix.target }}" "$binary" dist/platform
           npm pack ./dist/platform --pack-destination dist
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: npm-main
           path: dist/launcher
       - if: "!endsWith(matrix.target, '-musl')"
-        run: bash scripts/test-npm-artifacts.sh dist/launcher/*.tgz dist/*.tgz
+        run: bash scripts/test-npm-artifacts.sh ./dist/launcher/*.tgz ./dist/*.tgz
       - if: endsWith(matrix.target, '-musl')
         run: |
           docker run --rm -v "$PWD:/workspace:ro" -w /workspace node:24-alpine \
-            sh -ec 'apk add --no-cache bash git && bash scripts/test-npm-artifacts.sh dist/launcher/*.tgz dist/*.tgz'
-      - uses: actions/upload-artifact@v4
+            sh -ec 'apk add --no-cache bash git && bash scripts/test-npm-artifacts.sh ./dist/launcher/*.tgz ./dist/*.tgz'
+      - uses: actions/upload-artifact@v7
         with:
           name: npm-${{ matrix.target }}
           path: dist/*.tgz
@@ -103,7 +103,7 @@ jobs:
           node-version: '24'
           registry-url: https://registry.npmjs.org
           package-manager-cache: false
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: npm-*
           merge-multiple: true

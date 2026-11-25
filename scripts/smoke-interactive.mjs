@@ -38,10 +38,10 @@ async function interact(args, steps = [], expectedCode = 0, workspace = space, c
     .map(arg => "'" + arg.replaceAll("'", "'\\''") + "'").join(' ');
   // Report wk's exit status inside the PTY on both BSD and util-linux script.
   const session = `stty rows 30 cols ${cols} && ${command}; printf '\\nWK_EXIT=%s\\n' "$?"`;
-  const scriptArgs = process.platform === 'linux'
-    ? ['-q', '-c', session, '/dev/null']
-    : ['-q', '/dev/null', '/bin/sh', '-c', session];
-  const child = spawn('script', scriptArgs, { env, timeout: 15_000 });
+  // Darwin's script accepts a pipe for stdin, but rejects Node's socketpair.
+  const child = process.platform === 'darwin'
+    ? spawn('/bin/sh', ['-c', 'cat | /usr/bin/script -q /dev/null /bin/sh -c "$1"', 'wk-pty', session], { env, timeout: 15_000 })
+    : spawn('script', ['-q', '-c', session, '/dev/null'], { env, timeout: 15_000 });
   let log = '';
   let diagnostic = '';
   let offset = 0;
@@ -49,6 +49,7 @@ async function interact(args, steps = [], expectedCode = 0, workspace = space, c
   child.stderr.setEncoding('utf8').on('data', chunk => { diagnostic += chunk; });
   child.stdout.setEncoding('utf8').on('data', chunk => {
     log += chunk;
+    if (/\nWK_EXIT=\d+\r?\n/.test(log)) child.stdin.end();
     const step = steps[next];
     if (step && log.includes(step[0], offset)) {
       offset = log.length;
