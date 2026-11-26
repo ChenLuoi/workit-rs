@@ -34,6 +34,19 @@
 
 也可以用 `cargo install workit-rs --locked` 或 `npm install -g workit-rs` 安装。
 
+## 加入共享工作区
+
+克隆团队的工作区仓库，进入目录后运行 `wk setup`。第一步选择「个人配置」或「共享配置」，也可以用 `wk setup --local` 或 `wk setup --shared` 直接进入对应流程。
+
+- 个人配置将项目和工具选择保存在 Git 忽略的 `.wk/local.yaml`。可以跟随团队全部项目，也可以只选自己使用的项目。例如，`wk setup --local api web` 只准备这两个项目。拉取团队更新后运行 `wk sync`。命令会列出失败的项目并以非零状态退出，已成功的项目可立即使用。
+- 共享配置在 `wk.yaml` 中维护团队启用的工具、已注册的工作区 skills 和项目描述。例如，`wk setup --shared --tools codex,claude` 为团队启用这两个工具，个人配置可再选其中一部分。
+
+## 清理损坏任务和查找历史
+
+即使已经手动删除任务目录，仍可以运行 `wk close <任务名>`。遇到任务根仓库损坏或 worktree 缺失时，wk 会说明原因并请求确认。脚本可使用 `wk close <任务名> --force` 确认恢复清理。确认后会永久删除任务目录中的剩余文件，并将损坏原因写入历史记录的 `damage` 字段。完好的 worktree 仍需通过清洁度和锁定检查。
+
+已关闭的任务保存在 `.wk/history/`。文件名以本地开始时间开头，精确到秒，例如 `2026—11—26—18—42—07—feature%2Flogin.yaml`。`started_at` 和 `closed_at` 也使用这个日期格式。同一秒内的同名任务用 `—2` 等序号区分。
+
 ## 从源码开发
 
 需要 Rust 1.94 或更高版本和 Git，可以选用 `just`。使用 `cargo run --locked -- <参数>` 或 `just wk <参数>` 运行本地构建。仓库将 `WK_WORKSPACE` 指向已忽略的 `.wk-dev/`，Cargo 产物在 `target/`，自动化测试使用独立的临时工作区。

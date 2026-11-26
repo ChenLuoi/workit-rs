@@ -217,6 +217,9 @@ impl Report {
             if let Some(error) = &project.error {
                 println!("    {} {error}", style("✗").red());
             }
+            if project.disabled_locally {
+                println!("    Disabled locally");
+            }
             if let Some(role) = &project.project.description {
                 println!("    {role}");
             }

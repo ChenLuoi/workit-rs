@@ -34,6 +34,19 @@ Add `~/.local/bin` to `PATH` to run `wk`. On macOS, select the Darwin asset and 
 
 You can also install with `cargo install workit-rs --locked` or `npm install -g workit-rs`.
 
+## Join a shared workspace
+
+Clone the team's workspace repository, enter its directory and run `wk setup`. The first prompt offers personal settings for this checkout and shared settings for the team. Use `wk setup --local` or `wk setup --shared` to open either directly.
+
+- Personal setup saves projects and tools in the Git-ignored `.wk/local.yaml`. Follow all shared projects or select the ones you use. For example, `wk setup --local api web` prepares just those two. Run `wk sync` after pulling team changes. Each failed project is reported and makes the command exit nonzero. Successful projects remain available.
+- Shared setup edits tools, registered workspace skills and project descriptions in `wk.yaml`. For example, `wk setup --shared --tools codex,claude` enables those launchers for the team. Personal setup can select a subset.
+
+## Close a damaged task and find its history
+
+Run `wk close <task>` even if its directory has already been deleted. For a damaged root repository or missing worktree, wk describes the damage and asks for confirmation. In scripts, `wk close <task> --force` confirms recovery. Confirming permanently deletes the remaining task files. The history record lists the damage under `damage`. Healthy worktrees must still pass the usual clean and unlocked checks.
+
+Look in `.wk/history/` for closed tasks. Filenames start with the local date and time to the second, for example `2026—11—26—18—42—07—feature%2Flogin.yaml`. The fields `started_at` and `closed_at` use the same date format. A second archive for the same task and second gets the suffix `—2`.
+
 ## Develop from source
 
 Use Rust 1.94 or later, Git and optionally `just`. Both `cargo run --locked -- <args>` and `just wk <args>` run the local build. The checkout sets `WK_WORKSPACE` to the ignored `.wk-dev/` directory. Cargo builds into `target/`. Tests create their own temporary workspaces.

@@ -70,12 +70,18 @@ pub fn available_tools(enabled: &BTreeSet<Tool>) -> Vec<Tool> {
 pub fn select_tools(saved: Option<&BTreeSet<Tool>>) -> Result<BTreeSet<Tool>> {
     ensure!(
         prompt::interactive(),
-        "use wk config --tools <list> outside a terminal"
+        "use wk setup --shared --tools <list> outside a terminal"
     );
     eprintln!(
-        "Choose the tools to enable for this workspace. You can change them later with wk config."
+        "Choose the tools to enable for this workspace. You can change them later with wk setup --shared."
     );
-    let tools = Tool::value_variants();
+    pick_tools(Tool::value_variants(), saved)
+}
+
+pub(crate) fn pick_tools(tools: &[Tool], saved: Option<&BTreeSet<Tool>>) -> Result<BTreeSet<Tool>> {
+    if tools.is_empty() {
+        return Ok(BTreeSet::new());
+    }
     let mut choices = Vec::new();
     let mut defaults = Vec::new();
     for (i, &tool) in tools.iter().enumerate() {
@@ -124,15 +130,15 @@ impl Workspace {
         )?;
         let record = index.into_task(name)?;
         let dir = self.active_path(name, &record, None)?;
-        let enabled = self.config()?.tools;
+        let enabled = self.local_config()?.enabled_tools(&self.config()?);
         let tool = match requested {
             Some(tool) => tool,
             None => {
-                ensure!(!enabled.is_empty(), "no tools enabled; run wk config");
+                ensure!(!enabled.is_empty(), "no tools enabled; run wk setup");
                 let available = available_tools(&enabled);
                 ensure!(
                     !available.is_empty(),
-                    "none of the enabled tools are on PATH; check their installation or run wk config"
+                    "none of the enabled tools are on PATH; check their installation or run wk setup"
                 );
                 ensure!(
                     prompt::interactive(),
@@ -143,13 +149,13 @@ impl Workspace {
         };
         // Read again after the picker in case another terminal changed the settings.
         let enabled = if requested.is_none() {
-            self.config()?.tools
+            self.local_config()?.enabled_tools(&self.config()?)
         } else {
             enabled
         };
         ensure!(
             enabled.contains(&tool),
-            "{tool} is not enabled in this workspace; run wk config"
+            "{tool} is not enabled in this workspace; run wk setup"
         );
         let exe = tool.executable().with_context(|| {
             format!(

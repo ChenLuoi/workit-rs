@@ -1,3 +1,5 @@
+mod close;
+
 use crate::{
     git::{
         branch_exists, bytes, cached_origin_branches, fetch_origin, git, git_path, path_arg,
@@ -13,7 +15,6 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
-    io::Write,
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -24,9 +25,10 @@ pub enum Phase {
     Creating,
     Active,
     Closing,
+    Recovering,
 }
 
-#[derive(Clone, Deserialize, Serialize)]
+#[derive(Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Member {
     pub base: String,
@@ -60,6 +62,8 @@ pub struct Task<M = Member> {
     pub started_at_unix_ms: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub closing_at_unix_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub history: Option<crate::history::ClosingHistory>,
     pub projects: BTreeMap<String, M>,
 }
 
@@ -96,6 +100,16 @@ struct StartPlan {
 impl StartOptions {
     fn prepare(&self, ws: &Workspace, name: &str, config: &Config) -> Result<StartPlan> {
         let mut projects = self.projects.clone();
+        let local = ws.local_config()?;
+        let available: Vec<_> = config
+            .projects
+            .values()
+            .filter(|p| local.includes(&p.name))
+            .collect();
+        ensure!(
+            !available.is_empty(),
+            "no projects enabled locally; run wk setup --local"
+        );
         let mut preset = self.preset.clone();
         let mut selection = Preset::default();
         let tty = prompt::interactive();
@@ -118,8 +132,12 @@ impl StartOptions {
                 .with_context(|| format!("preset {id}"))?;
             projects = selection.projects.keys().cloned().collect();
         }
+        for p in &projects {
+            ensure!(config.projects.contains_key(p), "unknown project {p}");
+        }
+        local.require_projects(&projects)?;
         if wizard && (projects.is_empty() || self.interactive || preset.is_some()) {
-            projects = prompt::projects(config, &projects)?;
+            projects = prompt::projects(available, &projects, false)?;
         }
         ensure!(
             !projects.is_empty(),
@@ -129,7 +147,6 @@ impl StartOptions {
         ensure!(selected.len() == projects.len(), "duplicate project");
         selection.projects.retain(|p, _| selected.contains(p));
         for p in &projects {
-            ensure!(config.projects.contains_key(p), "unknown project {p}");
             selection.projects.entry(p.clone()).or_default();
         }
         let chosen = if wizard && !self.use_defaults {
@@ -256,14 +273,6 @@ pub(crate) fn check_task_git_dir(dir: &Path) -> Result<()> {
 impl Workspace {
     pub(crate) fn active_file(&self) -> Result<PathBuf> {
         child(&child(&self.0, ".wk")?, "active.yaml")
-    }
-
-    fn history_file(&self, name: &str, started_at: u64) -> Result<PathBuf> {
-        let history = child(&child(&self.0, ".wk")?, "history")?;
-        child(
-            &history,
-            &format!("{started_at}-{}.yaml", name.replace('/', "%2F")),
-        )
     }
 
     pub fn read_index<T: DeserializeOwned>(&self) -> Result<ActiveIndex<T>> {
@@ -440,9 +449,11 @@ impl Workspace {
         self.check_task_namespace(name, &index)?;
         let dir = self.task_dir(name)?;
         let config = self.config()?;
+        let local = self.local_config()?;
         let projects;
         let mut task = if creating {
             projects = plan.selection.projects.keys().cloned().collect::<Vec<_>>();
+            local.require_projects(&projects)?;
             if let Some(id) = &plan.preset {
                 ensure!(
                     snapshot.presets.get(id) == config.presets.get(id),
@@ -454,16 +465,13 @@ impl Workspace {
                 "task {name} appeared while preparing it; rerun wk start {name}"
             );
             let started_at_unix_ms = now_ms()?;
-            ensure!(
-                !self.history_file(name, started_at_unix_ms)?.try_exists()?,
-                "task ID already archived; retry start"
-            );
             Task {
                 phase: Phase::Creating,
                 preset: plan.preset,
                 skills: plan.selection.skills.clone(),
                 started_at_unix_ms,
                 closing_at_unix_ms: None,
+                history: None,
                 projects: plan.members,
             }
         } else {
@@ -641,11 +649,12 @@ impl Workspace {
             prefix.push_str(&format!(" --workspace {}", shell_path(&self.0)?));
         }
         println!("{}", dir.display());
-        let available = crate::tool::available_tools(&config.tools);
-        if config.tools.is_empty() {
-            println!("Enable tools with {prefix} config");
+        let enabled = local.enabled_tools(&config);
+        let available = crate::tool::available_tools(&enabled);
+        if enabled.is_empty() {
+            println!("Enable tools with {prefix} setup");
         } else if available.is_empty() {
-            println!("No enabled tool found on PATH. Check tool availability with {prefix} config");
+            println!("No enabled tool found on PATH. Check tool availability with {prefix} setup");
         }
         for tool in available {
             println!("{prefix} run {name} --agent {tool}");
@@ -673,131 +682,5 @@ impl Workspace {
             return child(&dir, p);
         }
         Ok(dir)
-    }
-
-    pub fn close(&self, name: &str) -> Result<()> {
-        let _lock = self.lock()?;
-        task_name_ok(name)?;
-        let mut index = self.active_index()?;
-        self.check_task_namespace(name, &index)?;
-        let mut task = index
-            .tasks
-            .remove(name)
-            .with_context(|| format!("no open task {name}"))?;
-        let config = self.config()?;
-        let dir = self.task_dir(name)?;
-        if child(&dir, ".git")?.try_exists()? {
-            check_task_git_dir(&dir)?;
-            let reference = git(
-                &dir,
-                &[
-                    "--git-dir=.git",
-                    "for-each-ref",
-                    "--count=1",
-                    "--format=%(refname)",
-                ],
-            )?;
-            ensure!(
-                reference.is_empty(),
-                "task {name} contains {reference} in its root repository; preserve and remove the ref before closing"
-            );
-        }
-        let mut removals = Vec::new();
-        for (p, member) in &mut task.projects {
-            let tree = child(&dir, p)?;
-            let spec = config
-                .projects
-                .get(p)
-                .with_context(|| format!("unregistered project {p}"))?;
-            let repo = self.verify_clean_repo(p, spec)?;
-            let listing = bytes(&repo, &["worktree", "list", "--porcelain", "-z"])?;
-            let row = git_record(&listing, &tree)?;
-            if !tree.exists() && row.is_none() && task.phase != Phase::Active {
-                continue;
-            }
-            let row =
-                row.with_context(|| format!("worktree is not registered: {}", tree.display()))?;
-            ensure!(
-                !row.split(|b| *b == 0)
-                    .any(|f| f == b"locked" || f.starts_with(b"locked ")),
-                "locked worktree: {}",
-                tree.display()
-            );
-            validate_tree(&repo, &tree, name)?;
-            check_clean(&tree)?;
-            let head = git(&tree, &["rev-parse", "HEAD"])?;
-            member.final_commit = Some(head.clone());
-            removals.push((repo, tree, head));
-        }
-        task.phase = Phase::Closing;
-        let closed_at_unix_ms = *task.closing_at_unix_ms.get_or_insert(now_ms()?);
-        index.save_task(self, name, &task)?;
-        for (repo, tree, head) in removals {
-            validate_tree(&repo, &tree, name)?;
-            check_clean(&tree)?;
-            ensure!(
-                git(&tree, &["rev-parse", "HEAD"])? == head,
-                "worktree HEAD changed while closing; retry"
-            );
-            git(&repo, &["worktree", "remove", "--", &git_path(&tree)?])?;
-        }
-        // A retry can arrive after the directory was removed but before the record was saved.
-        if dir.try_exists()? {
-            fs::remove_dir_all(&dir)
-                .with_context(|| format!("remove task directory {}", dir.display()))?;
-        }
-        if !task.skills.is_empty() {
-            task_skills::discard_pending(&self.pending_skills(name, task.started_at_unix_ms)?)?;
-        }
-        let root = self.0.join("tasks");
-        for group in dir.ancestors().skip(1).take_while(|p| *p != root) {
-            match fs::remove_dir(group) {
-                Ok(()) => (),
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
-                Err(e) if e.kind() == std::io::ErrorKind::DirectoryNotEmpty => break,
-                Err(e) => {
-                    return Err(e)
-                        .with_context(|| format!("remove empty group {}", group.display()));
-                }
-            }
-        }
-        #[derive(Serialize)]
-        struct Archive<'a> {
-            task: &'a str,
-            preset: &'a Option<String>,
-            skills: &'a BTreeSet<String>,
-            branch: &'a str,
-            started_at_unix_ms: u64,
-            closed_at_unix_ms: u64,
-            projects: &'a BTreeMap<String, Member>,
-        }
-        let path = self.history_file(name, task.started_at_unix_ms)?;
-        let history = path.parent().context("missing history directory")?;
-        fs::create_dir_all(history)?;
-        let contents = serde_saphyr::to_string(&Archive {
-            task: name,
-            preset: &task.preset,
-            skills: &task.skills,
-            branch: name,
-            started_at_unix_ms: task.started_at_unix_ms,
-            closed_at_unix_ms,
-            projects: &task.projects,
-        })?;
-        if path.try_exists()? {
-            ensure!(
-                fs::read(&path)? == contents.as_bytes(),
-                "existing archive differs from the closing task: {}",
-                path.display()
-            );
-        } else {
-            let mut temp = tempfile::NamedTempFile::new_in(history)?;
-            temp.write_all(contents.as_bytes())?;
-            temp.as_file().sync_all()?;
-            temp.persist_noclobber(path)?;
-        }
-        index.tasks.remove(name);
-        save_yaml(&self.active_file()?, &index)?;
-        println!("Closed {name}. Task directory removed; project branches retained.");
-        Ok(())
     }
 }

@@ -1,5 +1,5 @@
 mod skills;
-pub use skills::{skill_differences, sync_skills};
+pub use skills::{install_skills, skill_differences, sync_skills};
 
 use crate::{tasks::Task, workspace::child};
 use anyhow::{Context, Result, ensure};
@@ -75,10 +75,18 @@ pub fn deserialize_skills<'de, D: Deserializer<'de>>(de: D) -> Result<BTreeSet<S
     Ok(names)
 }
 
-pub fn select_skills() -> Result<BTreeSet<String>> {
+pub fn select_skills(saved: Option<&BTreeSet<String>>) -> Result<BTreeSet<String>> {
     eprintln!("Choose optional skills to copy into .agents/skills/ for this workspace.");
     let choices = skill_choices()?;
-    let defaults = (0..choices.len()).collect::<Vec<_>>();
+    let defaults = choices
+        .iter()
+        .enumerate()
+        .filter_map(|(i, skill)| {
+            saved
+                .is_none_or(|ids| ids.contains(&skill.name))
+                .then_some(i)
+        })
+        .collect::<Vec<_>>();
     pick_skills("Install skills", choices, &defaults)
 }
 

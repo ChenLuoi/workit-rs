@@ -48,18 +48,24 @@ pub fn progress<T>(label: &str, action: impl FnOnce() -> Result<T>) -> Result<T>
     result
 }
 
-pub fn projects(config: &crate::workspace::Config, defaults: &[String]) -> Result<Vec<String>> {
-    let checked = config
-        .projects
-        .keys()
+pub fn projects(
+    choices: Vec<&crate::workspace::Project>,
+    defaults: &[String],
+    allow_empty: bool,
+) -> Result<Vec<String>> {
+    let checked = choices
+        .iter()
         .enumerate()
-        .filter_map(|(i, p)| defaults.contains(p).then_some(i))
+        .filter_map(|(i, p)| defaults.contains(&p.name).then_some(i))
         .collect::<Vec<_>>();
-    let selected = MultiSelect::new("Select projects", config.projects.values().collect())
+    let mut picker = MultiSelect::new("Select projects", choices)
         .with_default(&checked)
-        .with_help_message("↑/↓ to move, Space to toggle, Enter to confirm, Esc to cancel")
-        .with_validator(MinLengthValidator::new(1).with_message("Select at least one project"))
-        .prompt()?;
+        .with_help_message("↑/↓ to move, Space to toggle, Enter to confirm, Esc to cancel");
+    if !allow_empty {
+        picker = picker
+            .with_validator(MinLengthValidator::new(1).with_message("Select at least one project"));
+    }
+    let selected = picker.prompt()?;
     Ok(selected
         .into_iter()
         .map(|project| project.name.clone())

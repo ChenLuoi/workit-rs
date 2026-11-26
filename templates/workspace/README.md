@@ -1,8 +1,10 @@
 # Project workspace
 
-This Git repository coordinates projects that share development tasks. After cloning it, run `wk sync` to restore the registered projects on this machine. Run `wk status` for the project inventory and active tasks. Project descriptions in `wk.yaml` explain how the repositories fit together.
+This Git repository coordinates projects that share development tasks. After cloning it, run `wk setup` and choose personal settings. Select the projects you use, or follow all shared projects. Use `wk setup --local` to change this checkout's selection and `wk sync` to update it. Team maintainers can use `wk setup --shared` to edit shared tools, official skills and project descriptions. Run `wk status` for the full project inventory and active tasks.
 
 Use a workspace session to scope and start a task. Once the projects are selected, `wk start` prints launch commands. Use one to open a **fresh session** for implementation. To review or close the task from the workspace, use `wk status <task>` or `wk close <task>`. Closing removes shared files in the task directory along with its worktrees.
+
+For a damaged task, `wk close <task>` asks for confirmation before permanently deleting remaining task files and recording the damage in history. Find closed tasks by local start date under `.wk/history/`.
 
 Commit the manifest, this README, team instructions and selected skills with the workspace. You can edit this file and `AGENTS.md` to describe the workspace's purpose and team conventions. Registered official skills can be refreshed with `wk skills sync`. Place team-authored skills in their own directories.
 

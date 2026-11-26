@@ -15,6 +15,15 @@ fn files(name: &str) -> impl Iterator<Item = (&'static str, &'static [u8])> {
     })
 }
 
+pub fn install_skills(ws: &Workspace, names: &std::collections::BTreeSet<String>) -> Result<()> {
+    for name in names {
+        for (file, bytes) in files(name) {
+            install_missing(&ws.0, &format!("{}{name}/{file}", super::SKILL_DIR), bytes)?;
+        }
+    }
+    Ok(())
+}
+
 fn matches_bundle(actual: &[u8], expected: &[u8]) -> bool {
     if actual == expected {
         return true;

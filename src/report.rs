@@ -215,6 +215,8 @@ struct ProjectStatus {
     #[serde(flatten)]
     project: Project,
     commit: Option<String>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    disabled_locally: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
 }
@@ -284,6 +286,7 @@ impl Workspace {
             preset: task.preset,
             started_at_unix_ms: task.started_at_unix_ms,
             closing_at_unix_ms: task.closing_at_unix_ms,
+            history: task.history,
             projects,
         }
     }
@@ -308,11 +311,17 @@ impl Workspace {
                 }
             }
         }
+        let local = self.local_config()?;
         if fetch {
-            for (name, spec) in &config.projects {
+            let targets: Vec<_> = config
+                .projects
+                .iter()
+                .filter(|(name, _)| selected.is_some() || local.includes(name))
+                .collect();
+            for &(name, spec) in &targets {
                 self.verify_clean_repo(name, spec)?;
             }
-            for name in config.projects.keys() {
+            for (name, _) in targets {
                 fetch_origin(&self.repo(name)?, name)?;
             }
         }
@@ -325,9 +334,14 @@ impl Workspace {
             .collect();
         let mut projects = BTreeMap::new();
         for (name, project) in config.projects {
-            let head = self
-                .verify_repo(&name, &project)
-                .and_then(|repo| git(&repo, &["rev-parse", "--revs-only", "HEAD"]));
+            let disabled_locally = !local.includes(&name);
+            let head = (|| -> Result<String> {
+                if disabled_locally && selected.is_none() && !self.repo(&name)?.try_exists()? {
+                    return Ok(String::new());
+                }
+                let repo = self.verify_repo(&name, &project)?;
+                git(&repo, &["rev-parse", "--revs-only", "HEAD"])
+            })();
             let (commit, error) = match head {
                 Ok(oid) => (Some(oid).filter(|b| !b.is_empty()), None),
                 Err(e) => (None, Some(format!("{e:#}"))),
@@ -338,6 +352,7 @@ impl Workspace {
                     project,
                     commit,
                     error,
+                    disabled_locally,
                 },
             );
         }
@@ -361,6 +376,7 @@ impl std::fmt::Display for Phase {
             Self::Creating => "creating",
             Self::Active => "active",
             Self::Closing => "closing",
+            Self::Recovering => "recovering",
         })
     }
 }

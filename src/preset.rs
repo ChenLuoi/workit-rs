@@ -133,8 +133,9 @@ impl Workspace {
                     .prompt()?;
                 result.description = Some(desc.trim().to_owned()).filter(|s| !s.is_empty());
                 let chosen = prompt::projects(
-                    &config,
+                    config.projects.values().collect(),
                     &result.projects.keys().cloned().collect::<Vec<_>>(),
+                    false,
                 )?;
                 let mut projects = BTreeMap::new();
                 for p in chosen {
