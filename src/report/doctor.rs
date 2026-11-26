@@ -54,6 +54,7 @@ fn inspect_project(
     ws: &Workspace,
     name: &str,
     project: Result<Project>,
+    inspect_clone: bool,
     has_git: bool,
     findings: &mut Findings,
 ) -> Option<PathBuf> {
@@ -62,6 +63,11 @@ fn inspect_project(
         findings.check("Project name", p.check_name(name));
         findings.check("Git URL", validate_url(&p.url));
         findings.check("Task base", validate_base(&p.base));
+    }
+    if !inspect_clone {
+        findings.check("Project key", name_ok(name));
+        findings.blocked = Some("disabled locally");
+        return None;
     }
     // clone_directory also validates the project key before using it as a path.
     let dir = findings.check("Clone directory", ws.clone_directory(name))?;
@@ -146,7 +152,7 @@ fn inspect_task(
             .problems
             .push("Task members  empty task record".into());
     }
-    if matches!(task.phase, Phase::Creating | Phase::Closing) {
+    if task.phase != Phase::Active {
         findings
             .problems
             .push(format!("incomplete ({})", task.phase));
@@ -325,6 +331,39 @@ pub(crate) fn run(cwd: &Path, workspace: Result<Workspace>) -> Result<()> {
                 None
             }
         };
+        let local = match ws.local_config() {
+            Ok(local) => local,
+            Err(e) => {
+                checks.fail(".wk/local.yaml", &format!("{e:#}"));
+                Default::default()
+            }
+        };
+        let mut records = Findings::default();
+        let index = records.check(
+            "Task record index",
+            ws.active_file().and_then(|path| {
+                ensure!(
+                    path.is_file(),
+                    "missing .wk/active.yaml; run wk setup --local or wk sync"
+                );
+                ws.read_index::<serde_json::Value>()
+            }),
+        );
+        let tasks = index
+            .as_ref()
+            .map(|i| i.tasks.keys().cloned().collect::<BTreeSet<_>>());
+        let mut parsed = BTreeMap::new();
+        if let Some(index) = index {
+            for (name, raw) in index.tasks {
+                let record = serde_json::from_value::<Task<serde_json::Value>>(raw);
+                if let Some(task) =
+                    records.check(&format!("{name}: Task record"), record.map_err(Into::into))
+                {
+                    parsed.insert(name, task);
+                }
+            }
+        }
+        let needed: BTreeSet<_> = parsed.values().flat_map(|t| t.projects.keys()).collect();
         let mut repos = BTreeMap::new();
         if let Some(config) = &config {
             let mut findings = Findings::default();
@@ -350,6 +389,10 @@ pub(crate) fn run(cwd: &Path, workspace: Result<Workspace>) -> Result<()> {
                     continue;
                 }
                 for (name, selection) in &preset.projects {
+                    if !local.includes(name) {
+                        findings.blocked = Some("preset includes a locally disabled project");
+                        continue;
+                    }
                     let Ok(spec) = &config.projects[name] else {
                         findings.blocked = Some("project configuration unavailable");
                         continue;
@@ -381,7 +424,10 @@ pub(crate) fn run(cwd: &Path, workspace: Result<Workspace>) -> Result<()> {
             checks.pass("Project inventory", &format!("{} registered", names.len()));
             for (name, project) in config.projects {
                 let mut findings = Findings::default();
-                if let Some(dir) = inspect_project(&ws, &name, project, has_git, &mut findings) {
+                let inspect_clone = local.includes(&name) || needed.contains(&name);
+                if let Some(dir) =
+                    inspect_project(&ws, &name, project, inspect_clone, has_git, &mut findings)
+                {
                     repos.insert(name.clone(), dir);
                 }
                 project_reports.insert(name, findings);
@@ -393,32 +439,13 @@ pub(crate) fn run(cwd: &Path, workspace: Result<Workspace>) -> Result<()> {
         }
 
         let mut active = BTreeMap::new();
-        let mut records = Findings::default();
-        let index = records.check(
-            "Task record index",
-            ws.active_file().and_then(|path| {
-                ensure!(path.is_file(), "missing .wk/active.yaml; run wk sync");
-                ws.read_index::<serde_json::Value>()
-            }),
-        );
-        let tasks = index
-            .as_ref()
-            .map(|i| i.tasks.keys().cloned().collect::<BTreeSet<_>>());
-        if let Some(index) = index {
-            for (name, raw) in index.tasks {
-                let record = serde_json::from_value::<Task<serde_json::Value>>(raw);
-                let Some(task) =
-                    records.check(&format!("{name}: Task record"), record.map_err(Into::into))
-                else {
-                    continue;
-                };
-                let phase = task.phase;
-                let findings = inspect_task(&ws, &name, task, projects.as_ref(), &repos, has_git);
-                if phase == Phase::Active {
-                    active.insert(name.clone(), findings);
-                } else {
-                    records.include(&name, findings);
-                }
+        for (name, task) in parsed {
+            let phase = task.phase;
+            let findings = inspect_task(&ws, &name, task, projects.as_ref(), &repos, has_git);
+            if phase == Phase::Active {
+                active.insert(name.clone(), findings);
+            } else {
+                records.include(&name, findings);
             }
         }
         let active_count = tasks

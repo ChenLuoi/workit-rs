@@ -120,15 +120,36 @@ try {
   assert.match(skipped, /✓ Preparing workspace directory.*✓ Writing workspace files/s);
   assert.ok(skipped.includes('\x1b[2mclaude (not installed)'));
   env.NO_COLOR = '1';
-  const savedDefaults = await interact(['config'], [['Enable tools', enter]], 0, emptySpace);
+  const editTools = ['Shared settings to edit', ' ' + enter];
+  const emptyManifest = readFileSync(join(emptySpace, 'wk.yaml'), 'utf8');
+  const savedDefaults = await interact(['setup', '--shared'], [editTools, ['Enable tools', enter]], 0, emptySpace);
   delete env.NO_COLOR;
-  assert.match(savedDefaults, /Enabled tools: codex, agy/);
+  assert.equal(readFileSync(join(emptySpace, 'wk.yaml'), 'utf8'), emptyManifest);
+  assert.match(emptyManifest, /tools:[\s\S]*?\bcodex\b[\s\S]*?\bagy\b/);
   assert.ok(savedDefaults.includes('claude (not installed)'));
   assert.ok(!savedDefaults.includes('\x1b[2mclaude (not installed)'));
   assert.doesNotMatch(skipped, /Project directory|Reading remote branches|Task base|Cloning|Registered/);
   assert.deepEqual(readdirSync(join(emptySpace, 'repos')), ['.gitignore']);
   assert.ok(!existsSync(join(emptySpace, '.agents')));
   execFileSync(wk, ['-w', emptySpace, 'doctor'], { env });
+  await interact(['setup'], [['Configuration scope', esc]], 1, emptySpace);
+  await interact(['setup'], [
+    ['Configuration scope', enter], ['Personal settings to edit', enter],
+    ['Local projects', enter], ['Local tools', esc],
+  ], 1, emptySpace);
+  assert.ok(!existsSync(join(emptySpace, '.wk', 'local.yaml')));
+  const sharedSetup = await interact(['setup'], [
+    ['Configuration scope', down + enter], editTools, ['Enable tools', enter],
+  ], 0, emptySpace);
+  assert.doesNotMatch(sharedSetup, /Personal settings to edit/);
+  const localSetup = await interact(['setup', '--local'], [
+    ['Personal settings to edit', enter], ['Local projects', enter], ['Local tools', enter],
+  ], 0, emptySpace);
+  assert.doesNotMatch(localSetup, /Configuration scope/);
+  assert.ok(existsSync(join(emptySpace, '.wk', 'local.yaml')));
+  const scopedShared = await interact(['setup', '--shared'], [['Shared settings to edit', esc]], 1, emptySpace);
+  assert.doesNotMatch(scopedShared, /Configuration scope/);
+  assert.equal(readFileSync(join(emptySpace, 'wk.yaml'), 'utf8'), emptyManifest);
   const emptyStart = await interact(['start'], [], 1, emptySpace);
   assert.match(emptyStart, /wk add <url>/);
   assert.doesNotMatch(emptyStart, /Task name|Select projects/);
@@ -179,6 +200,15 @@ try {
   assert.match(manifest(), /base: origin\/trunk/);
 
   const before = manifest();
+  execFileSync(wk, ['-w', space, 'start', 'damaged', 'alt', '--no-fetch'], { env });
+  renameSync(join(space, 'tasks/damaged/.git'), join(space, 'tasks/damaged/broken.git'));
+  const declinedClose = await interact(['close', 'damaged'], [['Clean up this damaged task?', enter]], 1);
+  assert.match(declinedClose, /Warning: damaged task damaged/);
+  assert.match(declinedClose, /All remaining files under .*damaged will be permanently deleted/);
+  assert.ok(existsSync(join(space, 'tasks/damaged/alt/.git')));
+  await interact(['close', 'damaged'], [['Clean up this damaged task?', 'y' + enter]]);
+  assert.ok(!existsSync(join(space, 'tasks/damaged')));
+  assert.ok(!existsSync(join(space, '.wk/recovery')));
   const cancelled = await interact(clone, [
     ['Project directory', 'cancelled' + enter], ['Task base', 'elease' + enter + esc],
   ], 1);
@@ -206,10 +236,12 @@ try {
   const selected = await interact(['run', 'defaults'], [['Launch tool', enter]]);
   assert.ok(selected.includes('launched codex in ' + join(space, 'tasks', 'defaults')));
   const configBefore = manifest();
-  await interact(['config'], [['Enable tools', esc]], 1);
+  await interact(['setup', '--shared'], [editTools, ['Enable tools', esc]], 1);
   assert.equal(manifest(), configBefore);
-  await interact(['config'], [['Enable tools', ' ' + down + ' ' + enter]]);
-  assert.match(await interact(['config'], [['Enable tools', enter]]), /Enabled tools: agy/);
+  await interact(['setup', '--shared'], [editTools, ['Enable tools', ' ' + down + ' ' + enter]]);
+  const edited = manifest();
+  await interact(['setup', '--shared'], [editTools, ['Enable tools', enter]]);
+  assert.equal(manifest(), edited);
   const changed = await interact(['run', 'defaults'], [['Launch tool', enter]]);
   assert.ok(changed.includes('launched agy in ' + join(space, 'tasks', 'defaults')));
   assert.doesNotMatch(changed, /codex|claude|vscode|zed/);

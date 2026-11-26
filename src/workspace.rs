@@ -17,7 +17,7 @@ use std::{
 };
 use tempfile::NamedTempFile;
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config<P = Project> {
     pub version: u32,
@@ -30,7 +30,7 @@ pub struct Config<P = Project> {
     pub presets: BTreeMap<String, crate::preset::Preset>,
 }
 
-#[derive(Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct Project {
     pub name: String,
@@ -190,7 +190,11 @@ impl Project {
     }
 }
 
-fn project_description(input: Option<String>, ask: bool, current: &str) -> Result<Option<String>> {
+pub(crate) fn project_description(
+    input: Option<String>,
+    ask: bool,
+    current: &str,
+) -> Result<Option<String>> {
     let value = match input {
         Some(value) => value,
         None if ask => {
@@ -296,7 +300,7 @@ impl Workspace {
         let skills = match skills {
             Some(skills) => skills.into_iter().collect(),
             None if yes => BTreeSet::new(),
-            None => templates::select_skills()?,
+            None => templates::select_skills(None)?,
         };
         let stage = prompt::progress("Preparing workspace directory", || {
             check_init_dir(&ws.0, &[])?;
@@ -451,66 +455,6 @@ impl Workspace {
             .with_context(|| format!("parse {}", self.0.join(MANIFEST).display()))?;
         config.validate()?;
         Ok(config)
-    }
-
-    pub fn configure(&self, tools: Option<Vec<Tool>>) -> Result<()> {
-        let current = self.config()?.tools;
-        let selected = match tools {
-            Some(tools) => tools.into_iter().collect(),
-            None => select_tools(Some(&current))?,
-        };
-        let _lock = self.lock()?;
-        let mut config = self.config()?;
-        ensure!(
-            config.tools == current,
-            "tool selection changed during setup; rerun wk config"
-        );
-        if config.tools != selected {
-            config.tools = selected;
-            config.save(&child(&self.0, MANIFEST)?)?;
-        }
-        if config.tools.is_empty() {
-            println!("No tools enabled.");
-        } else {
-            println!(
-                "Enabled tools: {}",
-                config
-                    .tools
-                    .iter()
-                    .map(Tool::to_string)
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            );
-        }
-        Ok(())
-    }
-
-    pub fn configure_description(&self, name: &str, value: Option<String>) -> Result<()> {
-        let original = self
-            .config()?
-            .projects
-            .remove(name)
-            .with_context(|| format!("unknown project {name}"))?;
-        ensure!(
-            value.is_some() || prompt::interactive(),
-            "supply --description outside a terminal"
-        );
-        let selected =
-            project_description(value, true, original.description.as_deref().unwrap_or(""))?;
-        let _lock = self.lock()?;
-        let mut config = self.config()?;
-        let project = config
-            .projects
-            .get_mut(name)
-            .with_context(|| format!("unknown project {name}"))?;
-        ensure!(
-            *project == original,
-            "project {name} changed during setup; rerun wk config"
-        );
-        project.description = selected;
-        config.save(&child(&self.0, MANIFEST)?)?;
-        println!("Updated description for {name}");
-        Ok(())
     }
 
     pub fn repo(&self, name: &str) -> Result<PathBuf> {
@@ -733,31 +677,61 @@ impl Workspace {
     pub fn sync(&self, names: &[String]) -> Result<()> {
         let _lock = self.lock()?;
         let config = self.config()?;
-        let names = if names.is_empty() {
-            config.projects.keys().cloned().collect()
+        let (names, skipped) = if names.is_empty() {
+            let local = self.local_config()?;
+            let enabled: Vec<_> = config
+                .projects
+                .keys()
+                .filter(|p| local.includes(p))
+                .cloned()
+                .collect();
+            let skipped = config.projects.len() - enabled.len();
+            (enabled, skipped)
         } else {
-            names.to_vec()
+            (names.to_vec(), 0)
         };
         for name in &names {
             ensure!(config.projects.contains_key(name), "unknown project {name}");
-            if self.repo(name)?.try_exists()? {
-                self.verify_clean_repo(name, &config.projects[name])?;
-            }
         }
         self.ensure_layout(&config)?;
+        self.sync_projects(&config, &names, skipped)
+    }
+
+    // The caller holds the workspace lock and has validated the requested names.
+    pub(crate) fn sync_projects(
+        &self,
+        config: &Config,
+        names: &[String],
+        skipped: usize,
+    ) -> Result<()> {
+        let mut failures = Vec::new();
         for name in names {
-            let project = &config.projects[&name];
-            if self.repo(&name)?.exists() {
-                let repo = self.repo(&name)?;
-                fetch_origin(&repo, &name)?;
-                self.verify_clean_repo(&name, project)?;
-                refresh_snapshot(&repo, &project.base)?;
-            } else {
-                self.clone_project(project)?;
+            match self.sync_project(name, &config.projects[name]) {
+                Ok(()) => println!("Synced {name}"),
+                Err(error) => failures.push(format!("{name}: {error:#}")),
             }
-            println!("Synced {name}");
         }
+        println!(
+            "{} synced, {skipped} disabled locally, {} failed",
+            names.len() - failures.len(),
+            failures.len()
+        );
+        ensure!(
+            failures.is_empty(),
+            "sync failed for:\n{}",
+            failures.join("\n")
+        );
         Ok(())
+    }
+
+    fn sync_project(&self, name: &str, project: &Project) -> Result<()> {
+        if !self.repo(name)?.try_exists()? {
+            return self.clone_project(project);
+        }
+        let repo = self.verify_clean_repo(name, project)?;
+        fetch_origin(&repo, name)?;
+        self.verify_clean_repo(name, project)?;
+        refresh_snapshot(&repo, &project.base)
     }
 
     pub fn task_dir(&self, name: &str) -> Result<PathBuf> {

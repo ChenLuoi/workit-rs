@@ -999,6 +999,252 @@ fn shared_manifest_can_restore_clones() {
 }
 
 #[test]
+fn setup_scopes_shared_and_personal_settings_and_continues_partial_sync() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    let original = fixture(root);
+    ok(
+        &original,
+        WK,
+        &[
+            "setup",
+            "--shared",
+            "--tools",
+            "codex,claude",
+            "--skills",
+            "wk-cli",
+            "--project",
+            "ops",
+            "--description",
+            "Operations",
+        ],
+    );
+    assert!(!original.join(".wk/local.yaml").exists());
+    set_presets(
+        &original,
+        serde_json::json!({"pair": {"projects": {"api": {}, "ops": {}}}}),
+    );
+    ok(&original, "git", &["add", "."]);
+    ok(&original, "git", &["commit", "-m", "workspace"]);
+    ok(root, "git", &["clone", original.to_str().unwrap(), "other"]);
+    let ws = root.join("other");
+    let manifest = fs::read(ws.join("wk.yaml")).unwrap();
+    assert!(!run(&ws, WK, &["setup"]).status.success());
+    assert!(
+        !run(&ws, WK, &["setup", "--local", "--shared"])
+            .status
+            .success()
+    );
+    assert!(!ws.join(".wk").exists());
+    fs::rename(root.join("api"), root.join("offline")).unwrap();
+    let partial = run(&ws, WK, &["setup", "--local", "--all-projects"]);
+    assert!(!partial.status.success());
+    assert!(
+        String::from_utf8_lossy(&partial.stdout).contains("1 synced, 0 disabled locally, 1 failed")
+    );
+    assert!(String::from_utf8_lossy(&partial.stderr).contains("api:"));
+    assert!(ws.join("repos/ops/.git").is_dir());
+    ok(&ws, WK, &["setup", "--local", "ops", "--tools", "claude"]);
+    assert_eq!(fs::read(ws.join("wk.yaml")).unwrap(), manifest);
+    assert!(ok(&ws, WK, &["sync"]).contains("1 synced, 1 disabled locally, 0 failed"));
+    let report: serde_json::Value =
+        serde_json::from_str(&ok(&ws, WK, &["status", "--fetch", "--json"])).unwrap();
+    assert_eq!(report["projects"]["api"]["disabled_locally"], true);
+    assert!(report["projects"]["api"].get("error").is_none());
+    assert!(ok(&ws, WK, &["doctor"]).contains("SKIP  api  disabled locally"));
+    let preset = run(&ws, WK, &["start", "fix", "--preset", "pair"]);
+    assert!(
+        !preset.status.success()
+            && String::from_utf8_lossy(&preset.stderr).contains("disabled locally: api")
+    );
+    assert!(!ws.join("tasks/fix").exists());
+    ok(&ws, WK, &["start", "one", "ops", "--no-fetch"]);
+    let launch = run(&ws, WK, &["run", "one", "--codex"]);
+    assert!(
+        !launch.status.success() && String::from_utf8_lossy(&launch.stderr).contains("not enabled")
+    );
+    fs::rename(root.join("offline"), root.join("api")).unwrap();
+    ok(&ws, WK, &["setup", "--local", "api"]);
+    assert!(ws.join("repos/ops/.git").exists());
+    ok(&ws, WK, &["start", "one"]);
+    ok(&ws, WK, &["status", "one", "--fetch"]);
+    ok(&ws, WK, &["doctor"]);
+    ok(&ws, WK, &["close", "one"]);
+    assert!(ok(&ws, "git", &["status", "--porcelain"]).is_empty());
+}
+
+#[test]
+fn damaged_task_cleanup_archives_the_damage_and_only_removes_its_registrations() {
+    let tmp = tempfile::tempdir().unwrap();
+    let ws = fixture(tmp.path());
+    let name = "group/damaged";
+    ok(&ws, WK, &["start", name, "api", "--no-fetch"]);
+    ok(&ws, WK, &["start", "group/sibling", "api", "--no-fetch"]);
+    let dir = ws.join("tasks").join(name);
+    fs::rename(dir.join(".git"), dir.join("broken.git")).unwrap();
+    fs::write(dir.join(".git"), "broken").unwrap();
+    fs::write(dir.join("notes"), "keep").unwrap();
+    fs::write(dir.join("api/.env"), "private").unwrap();
+    assert!(!run(&ws, WK, &["close", name, "--force"]).status.success());
+    fs::remove_file(dir.join("api/.env")).unwrap();
+    let index = active_index(&ws);
+    let attempt = run(&ws, WK, &["close", name]);
+    assert!(!attempt.status.success());
+    assert!(String::from_utf8_lossy(&attempt.stderr).contains("--force"));
+    assert_eq!(active_index(&ws), index);
+    ok(&ws, WK, &["close", name, "--force"]);
+    assert!(!dir.exists());
+    assert!(!ws.join(".wk/recovery").exists());
+    let path = ws
+        .join(".wk/history")
+        .read_dir()
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let archive: serde_json::Value =
+        serde_saphyr::from_str(&fs::read_to_string(path).unwrap()).unwrap();
+    assert!(archive["damage"].as_array().unwrap().iter().any(|reason| {
+        reason
+            .as_str()
+            .unwrap()
+            .contains("expected a bare Git repository")
+    }));
+    let repo = ws.join("repos/api");
+    let listing = ok(&repo, "git", &["worktree", "list", "--porcelain"]);
+    assert!(!listing.contains("refs/heads/group/damaged"));
+    assert!(listing.contains("refs/heads/group/sibling"));
+    ok(
+        &repo,
+        "git",
+        &["rev-parse", "--verify", "refs/heads/group/damaged"],
+    );
+
+    // A user may already have removed the directory, leaving only Git's registration.
+    let missing = "deleted";
+    let external = tmp.path().join("other-missing-worktree");
+    ok(
+        &repo,
+        "git",
+        &[
+            "worktree",
+            "add",
+            "-b",
+            "other-missing",
+            external.to_str().unwrap(),
+        ],
+    );
+    fs::remove_dir_all(&external).unwrap();
+    ok(&ws, WK, &["start", missing, "api", "--no-fetch"]);
+    let tip = ok(&repo, "git", &["rev-parse", "refs/heads/deleted"]);
+    fs::remove_dir_all(ws.join("tasks/deleted")).unwrap();
+    ok(&ws, WK, &["close", missing, "--force"]);
+    assert!(
+        ok(&repo, "git", &["worktree", "list", "--porcelain"]).contains("refs/heads/other-missing")
+    );
+    let archived = ws
+        .join(".wk/history")
+        .read_dir()
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .find(|p| {
+            p.file_name()
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .ends_with("—deleted.yaml")
+        })
+        .unwrap();
+    let archived: serde_json::Value =
+        serde_saphyr::from_str(&fs::read_to_string(archived).unwrap()).unwrap();
+    assert_eq!(archived["recovered"], true);
+    assert_eq!(archived["projects"]["api"]["final_commit"], tip.trim());
+    assert!(!ok(&repo, "git", &["worktree", "list", "--porcelain"]).contains("refs/heads/deleted"));
+    ok(&ws, WK, &["doctor"]);
+    ok(&ws, WK, &["status", "group/sibling"]);
+}
+
+#[test]
+fn close_archives_local_dates_and_distinguishes_same_second_tasks() {
+    let tmp = tempfile::tempdir().unwrap();
+    let ws = fixture(tmp.path());
+    let name = "group/history";
+    ok(&ws, WK, &["start", name, "api", "--no-fetch"]);
+    let start = active_index(&ws)["tasks"][name]["started_at_unix_ms"]
+        .as_i64()
+        .unwrap();
+    ok(&ws, WK, &["close", name]);
+    let dir = ws.join(".wk/history");
+    let path = dir.read_dir().unwrap().next().unwrap().unwrap().path();
+    let archive: serde_json::Value =
+        serde_saphyr::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    const FORMAT: &str = "%Y—%m—%d—%H—%M—%S";
+    let start_date = chrono::DateTime::from_timestamp_millis(start)
+        .unwrap()
+        .with_timezone(&chrono::Local);
+    let stamp = start_date.format(FORMAT).to_string();
+    assert_eq!(archive["started_at"], stamp);
+    let closed = archive["closed_at"].as_str().unwrap();
+    assert_eq!(closed.chars().count(), 19);
+    chrono::NaiveDateTime::parse_from_str(closed, FORMAT).unwrap();
+    assert_eq!(
+        path.file_name().unwrap().to_str().unwrap(),
+        format!("{stamp}—group%2Fhistory.yaml")
+    );
+    let first = fs::read(&path).unwrap();
+    ok(
+        &ws.join("repos/api"),
+        "git",
+        &["branch", "-m", name, "previous"],
+    );
+    ok(&ws, WK, &["start", name, "api", "--no-fetch"]);
+    let mut index = active_index(&ws);
+    index["tasks"][name]["started_at_unix_ms"] = start.into();
+    fs::write(
+        ws.join(".wk/active.yaml"),
+        serde_saphyr::to_string(&index).unwrap(),
+    )
+    .unwrap();
+    ok(&ws, WK, &["close", name]);
+    assert!(
+        dir.join(format!("{stamp}—group%2Fhistory—2.yaml"))
+            .is_file()
+    );
+    assert_eq!(fs::read(path).unwrap(), first);
+}
+
+#[test]
+fn retrying_a_damaged_close_preserves_its_recorded_damage() {
+    let tmp = tempfile::tempdir().unwrap();
+    let ws = fixture(tmp.path());
+    ok(&ws, WK, &["start", "retry", "api", "--no-fetch"]);
+    let mut index = active_index(&ws);
+    let task = &mut index["tasks"]["retry"];
+    let ms = task["started_at_unix_ms"].as_i64().unwrap();
+    let stamp = chrono::DateTime::from_timestamp_millis(ms)
+        .unwrap()
+        .with_timezone(&chrono::Local)
+        .format("%Y—%m—%d—%H—%M—%S")
+        .to_string();
+    task["phase"] = "recovering".into();
+    task["closing_at_unix_ms"] = ms.into();
+    task["projects"]["api"]["final_commit"] = task["projects"]["api"]["commit"].clone();
+    task["history"] =
+        serde_json::json!({"started_at": stamp, "closed_at": stamp, "damage": ["original damage"]});
+    let dir = ws.join(".wk/history");
+    let active = ws.join(".wk/active.yaml");
+    let pending = serde_saphyr::to_string(&index).unwrap();
+    fs::write(&active, &pending).unwrap();
+    ok(&ws, WK, &["close", "retry"]);
+    let record = fs::read_to_string(dir.join(format!("{stamp}—retry.yaml"))).unwrap();
+    assert!(record.contains("original damage"));
+    fs::write(&active, pending).unwrap();
+    ok(&ws, WK, &["close", "retry"]);
+    assert_eq!(dir.read_dir().unwrap().count(), 1);
+}
+
+#[test]
 fn workspace_commit_shares_only_the_definition_and_sync_rebuilds_local_state() {
     let tmp = tempfile::tempdir().unwrap();
     let ws = fixture(tmp.path());
@@ -1156,7 +1402,7 @@ fn windows_refuses_device_names_and_launches_a_cmd_tool_in_the_task_directory() 
             .success()
     );
     ok(&ws, WK, &["start", "COM10", "api"]);
-    ok(&ws, WK, &["config", "--tools", "vscode"]);
+    ok(&ws, WK, &["setup", "--shared", "--tools", "vscode"]);
     let bin = tmp.path().join("launcher dir");
     fs::create_dir(&bin).unwrap();
     fs::write(bin.join("code.cmd"), "@echo off\r\nif not exist api\\.git exit /b 3\r\nif not \"%~1\"==\".\" exit /b 4\r\nexit /b 17\r\n").unwrap();
@@ -1454,7 +1700,8 @@ fn task_docs_snapshot_member_roles_and_bases_once() {
         &ws,
         WK,
         &[
-            "config",
+            "setup",
+            "--shared",
             "--project",
             "api",
             "--description",
@@ -1464,7 +1711,14 @@ fn task_docs_snapshot_member_roles_and_bases_once() {
     ok(
         &ws,
         WK,
-        &["config", "--project", "client", "--description", ""],
+        &[
+            "setup",
+            "--shared",
+            "--project",
+            "client",
+            "--description",
+            "",
+        ],
     );
     let overview = ok(&ws, WK, &["status"]);
     assert!(overview.contains("Updated role") && !overview.contains("Calls the API"));
@@ -1543,7 +1797,7 @@ fn explicit_workspace_runs_outside_source_tree() {
     assert!(outside.join(dir).join("wk.yaml").is_file());
     assert!(!outside.join("wk.yaml").exists());
     let commands = ok(outside, WK, &["-w", dir, "start", "demo", "api"]);
-    assert!(commands.contains("--workspace") && commands.contains(" config"));
+    assert!(commands.contains("--workspace") && commands.contains(" setup"));
 }
 
 #[test]
@@ -1632,7 +1886,10 @@ fn run_launches_only_enabled_tools_from_the_task_root() {
             vec!["run", name, "--codex", "--claude"],
             "cannot be used with",
         ),
-        (vec!["config", "--tools", "shell"], "invalid value"),
+        (
+            vec!["setup", "--shared", "--tools", "shell"],
+            "invalid value",
+        ),
     ] {
         let out = invoke(&args);
         assert!(
@@ -1644,7 +1901,12 @@ fn run_launches_only_enabled_tools_from_the_task_root() {
     ok(
         &ws,
         WK,
-        &["config", "--tools", "codex,claude,agy,vscode,zed"],
+        &[
+            "setup",
+            "--shared",
+            "--tools",
+            "codex,claude,agy,vscode,zed",
+        ],
     );
     let expected_dir = ws.join("tasks").join(name).canonicalize().unwrap();
     for (selection, exe, arguments) in [
@@ -1663,7 +1925,7 @@ fn run_launches_only_enabled_tools_from_the_task_root() {
             format!("{}\n{exe}\n{arguments}\n", expected_dir.display())
         );
     }
-    ok(&ws, WK, &["config", "--tools"]);
+    ok(&ws, WK, &["setup", "--shared", "--tools"]);
     assert!(String::from_utf8_lossy(&invoke(&["run", name]).stderr).contains("no tools enabled"));
     assert!(
         String::from_utf8_lossy(&invoke(&["run", name, "--codex"]).stderr).contains("not enabled")

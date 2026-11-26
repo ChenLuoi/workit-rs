@@ -1,7 +1,9 @@
 mod git;
+mod history;
 mod preset;
 mod prompt;
 mod report;
+mod setup;
 mod task_skills;
 mod tasks;
 mod templates;
@@ -49,18 +51,8 @@ enum Action {
         #[arg(long, value_delimiter = ',', value_parser = clap::builder::PossibleValuesParser::new(templates::skill_names()))]
         skills: Option<Vec<String>>,
     },
-    /// Configure optional workspace settings. Space toggles tools and Enter saves.
-    Config {
-        /// Replace the enabled tools (comma-separated). Pass --tools alone to clear.
-        #[arg(long, value_delimiter = ',', num_args = 0..=1, conflicts_with = "project")]
-        tools: Option<Vec<Tool>>,
-        /// Edit a registered project's description.
-        #[arg(long)]
-        project: Option<String>,
-        /// Set the description, or pass an empty string to clear it.
-        #[arg(long, requires = "project")]
-        description: Option<String>,
-    },
+    /// Choose personal or shared workspace settings.
+    Setup(setup::SetupOptions),
     /// Clone into a new repos/<directory> and register the project in wk.yaml.
     ///
     /// With only a URL, confirm the directory, choose a remote branch by prefix,
@@ -135,7 +127,12 @@ enum Action {
     /// Show workspace information and diagnose projects, active tasks, official skills and directory layout.
     Doctor,
     /// Delete tasks/<task>/ including shared resources after checking all worktrees. Keep the Git branches.
-    Close { task: String },
+    Close {
+        task: String,
+        /// Confirm recovery of a damaged task outside a terminal.
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -187,12 +184,7 @@ fn execute() -> Result<i32> {
     let ws = ws?;
     match cli.command {
         Action::Init { .. } | Action::Doctor => unreachable!(),
-        Action::Config {
-            project: Some(name),
-            description,
-            ..
-        } => ws.configure_description(&name, description)?,
-        Action::Config { tools, .. } => ws.configure(tools)?,
+        Action::Setup(options) => ws.setup(options)?,
         Action::Add {
             url,
             directory,
@@ -228,7 +220,7 @@ fn execute() -> Result<i32> {
             );
         }
         Action::Status { task, json, fetch } => ws.status(task.as_deref(), json, fetch)?,
-        Action::Close { task } => ws.close(&task)?,
+        Action::Close { task, force } => ws.close(&task, force)?,
     }
     Ok(0)
 }

@@ -15,6 +15,8 @@ When the project descriptions settle the scope, proceed with that selection. If 
 
 For a new task, choose its projects and the appropriate bases with `wk start`. For an existing task, use its recorded name and members. If creation was interrupted, repeat `wk start <task>` so wk can finish from the recorded commits.
 
+If the work requires a locally disabled project, identify it and let the user decide whether to enable it through personal setup. A shared preset may require projects outside this checkout's selection.
+
 For recurring joint work, inspect `wk preset list` and `wk preset show <name>`. Use a matching preset for the handoff. When the request changes one project's starting branch or needs a different integration skill, use `wk start <task> --preset <name> --interactive` to adjust this task. For a scripted handoff with explicit membership, select catalog skills through `--skills`. Report the actual task setup using `wk status <task>`.
 
 Tell the user the task name, selected projects, and one launch command printed by wk. Carry the requested outcome and any unresolved scope question into the handoff. The user starts a fresh harness in the task directory. From the workspace session, use wk for task information and leave direct access to `tasks/` to that fresh session.
