@@ -92,6 +92,7 @@ try {
   const clone = ['clone', repo];
   const enter = '\r';
   const down = '\x1b[B';
+  const clearSelections = '\x1b[D'; // Left arrow in a multiselect.
   const esc = '\x1b';
   const confirmTarget = `Initialize workspace in ${space}?`;
   const firstProject = [[confirmTarget, enter], ['First project URL', repo + enter]];
@@ -113,9 +114,10 @@ try {
   const menu = stripVTControlCharacters(skillPicker).replace(/[\r\n]/g, '');
   assert.match(menu, /wk-cli\s+Look up wk commands.*managing a workspace\./);
   assert.match(menu, /wk-workspace-workflow\s+Scope a user request.*from the workspace\./);
+  assert.match(menu, /wk-worktree-optimization\s+Review registered projects.*pnpm migrations\./);
   assert.ok(!existsSync(emptySpace));
   const skipped = await interact(['init'], [
-    ...emptySetup, ['Enable tools', enter], ['Install skills', ' ' + down + ' ' + enter],
+    ...emptySetup, ['Enable tools', enter], ['Install skills', clearSelections + enter],
   ], 0, emptySpace);
   assert.match(skipped, /✓ Preparing workspace directory.*✓ Writing workspace files/s);
   assert.ok(skipped.includes('\x1b[2mclaude (not installed)'));
@@ -189,7 +191,7 @@ try {
   assert.match(initialized, /start from the selected branch.*Task base/s);
   assert.match(initialized, /✓ Preparing workspace directory.*✓ Cloning alt.*✓ Writing workspace files.*Registered alt/s);
   assert.ok(existsSync(join(space, 'repos', 'alt', '.git')));
-  for (const name of ['wk-cli', 'wk-workspace-workflow']) {
+  for (const name of ['wk-cli', 'wk-workspace-workflow', 'wk-worktree-optimization']) {
     assert.ok(existsSync(join(space, '.agents', 'skills', name, 'SKILL.md')));
   }
   assert.match(manifest(), /base: origin\/release\/2\.x/);
