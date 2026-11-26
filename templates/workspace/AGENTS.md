@@ -4,4 +4,4 @@ In a session started at this workspace root, identify the projects a request inv
 
 Keep this session out of `tasks/`. Give the user a launch command for a fresh task session. Query and close tasks through wk.
 
-When installed, use `wk-workspace-workflow` for scoping and handoff and `wk-cli` for command behavior. Run `wk --help` for the available commands. Extend this file with your team's coordination conventions.
+When installed, use `wk-workspace-workflow` for scoping and handoff, `wk-cli` for command behavior and `wk-worktree-optimization` to review registered projects for npm-to-pnpm migration opportunities. Run `wk --help` for the available commands. Extend this file with your team's coordination conventions.

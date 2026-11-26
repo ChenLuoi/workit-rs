@@ -41,6 +41,8 @@ Clone the team's workspace repository, enter its directory and run `wk setup`. T
 - Personal setup saves projects and tools in the Git-ignored `.wk/local.yaml`. Follow all shared projects or select the ones you use. For example, `wk setup --local api web` prepares just those two. Run `wk sync` after pulling team changes. Each failed project is reported and makes the command exit nonzero. Successful projects remain available.
 - Shared setup edits tools, registered workspace skills and project descriptions in `wk.yaml`. For example, `wk setup --shared --tools codex,claude` enables those launchers for the team. Personal setup can select a subset.
 
+To review repeated npm installs across worktrees, select **wk-worktree-optimization** under **Workspace skills** in `wk setup --shared`. Ask the workspace session which registered projects could benefit from pnpm. It reads lockfiles and install commands from the reference snapshots and suggests a migration for each match. When you choose a project to migrate, the workspace session creates a task and hands the changes to a fresh task session.
+
 ## Close a damaged task and find its history
 
 Run `wk close <task>` even if its directory has already been deleted. For a damaged root repository or missing worktree, wk describes the damage and asks for confirmation. In scripts, `wk close <task> --force` confirms recovery. Confirming permanently deletes the remaining task files. The history record lists the damage under `damage`. Healthy worktrees must still pass the usual clean and unlocked checks.
