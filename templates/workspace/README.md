@@ -6,7 +6,7 @@ Use a workspace session to scope and start a task. Once the projects are selecte
 
 For a damaged task, `wk close <task>` asks for confirmation before permanently deleting remaining task files and recording the damage in history. Find closed tasks by local start date under `.wk/history/`.
 
-Commit the manifest, this README, team instructions and selected skills with the workspace. You can edit this file and `AGENTS.md` to describe the workspace's purpose and team conventions. Registered official skills can be refreshed with `wk skills sync`. Place team-authored skills in their own directories.
+Commit the manifest, this README, team instructions and selected skills with the workspace. You can edit this file and `AGENTS.md` to describe the workspace's purpose and team conventions. Registered official skills can be refreshed with `wk sync --skills`. Place team-authored skills in their own directories.
 
 ## Reusable task setups
 

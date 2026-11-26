@@ -71,13 +71,14 @@ enum Action {
         #[arg(long)]
         description: Option<String>,
     },
-    /// Manage the official skills registered in wk.yaml.
-    Skills {
-        #[command(subcommand)]
-        command: SkillAction,
+    /// Sync project reference clones or restore registered official skills.
+    Sync {
+        /// Projects to clone or refresh at their configured bases (default: locally enabled projects).
+        projects: Vec<String>,
+        /// Replace a registered official skill directory with the bundled copy. Omit NAME to replace all registered skills.
+        #[arg(long, value_name = "NAME", conflicts_with = "projects")]
+        skills: Option<Option<String>>,
     },
-    /// Restore missing clones, fetch origin and refresh reference files at each configured base.
-    Sync { projects: Vec<String> },
     /// Remove a project and its local Git repository after checking for work to keep.
     ///
     /// Close its tasks and other worktrees first. Local changes and commits
@@ -135,12 +136,6 @@ enum Action {
     },
 }
 
-#[derive(Subcommand)]
-enum SkillAction {
-    /// Replace registered skill contents with the version bundled in this binary.
-    Sync { skill: Option<String> },
-}
-
 fn execute() -> Result<i32> {
     let cli = Cli::parse();
     let cwd = std::env::current_dir()?;
@@ -191,10 +186,10 @@ fn execute() -> Result<i32> {
             base,
             description,
         } => ws.add(&url, directory, base, description)?,
-        Action::Skills {
-            command: SkillAction::Sync { skill },
-        } => templates::sync_skills(&ws, skill.as_deref())?,
-        Action::Sync { projects } => ws.sync(&projects)?,
+        Action::Sync { projects, skills } => match skills {
+            Some(skill) => templates::sync_skills(&ws, skill.as_deref())?,
+            None => ws.sync(&projects)?,
+        },
         Action::Remove { project } => ws.remove(&project)?,
         Action::Start(options) => ws.start(options)?,
         Action::Preset { command } => ws.preset(command)?,

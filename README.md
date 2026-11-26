@@ -76,7 +76,7 @@ To work on the task, start a new session using the launch command printed by `st
 | Generated workspace and task documents | `templates/workspace/`, `templates/task/`, `src/templates.rs` |
 | Official workspace skills | `templates/workspace/.agents/skills/`, `src/templates/skills.rs` |
 
-The workspace guides are starting points for teams to edit. The bundled **wk-cli** skill documents the command interface. **wk-workspace-workflow** covers project selection, handoff and closure. Edit their source files alongside the corresponding CLI behavior. Cargo embeds them in the binary for both release channels. After upgrading the binary, a workspace can run `wk doctor` and explicitly refresh registered skills with `wk skills sync [skill]`.
+The workspace guides are starting points for teams to edit. The bundled **wk-cli** skill documents the command interface. **wk-workspace-workflow** covers project selection, handoff and closure. Edit their source files alongside the corresponding CLI behavior. Cargo embeds them in the binary for both release channels. After upgrading the binary, a workspace can run `wk doctor` to check registered skills. Use `wk sync --skills wk-cli` to replace that skill directory with the bundled copy, or `wk sync --skills` for all registered skills. Run project sync separately.
 
 Task guides receive a snapshot of each member project's name, role, and actual starting ref and commit. Use the same member data for the generated README and AGENTS file. The integration tests in `tests/cli.rs` exercise these contracts through the built binary.
 
