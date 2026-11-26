@@ -65,7 +65,7 @@ switch (cmd) {
       const archive = join(archiveDir, `${npmPackage.slice(1).replace('/', '-')}-${pkg.version}.tgz`);
       const data = execFileSync('tar', ['-xOzf', archive, 'package/bin/' + binary], { maxBuffer: Infinity });
       assert.ok(data.length, `empty binary in ${archive}`);
-      const fileName = `${pkg.name}-${pkg.version}-${target}${extname(binary)}`;
+      const fileName = `wk-${target}-v${pkg.version}${extname(binary)}`;
       writeFileSync(join(outputDir, fileName), data, { mode: 0o755 });
       return { kind: 'binary', fileName, bytes: data.length, sha256: sha256(data), target, npmPackage, rustTarget: rust };
     });
