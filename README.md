@@ -6,9 +6,11 @@ This repository develops `wk`, a Rust CLI that coordinates tasks across Git repo
 
 ## Install
 
-Download a standalone executable from [GitHub Releases](https://github.com/ChenLuoi/workit-rs/releases/latest). Pick `linux-{x64,arm64}-{gnu,musl}`, `darwin-{x64,arm64}`, or `win32-x64-msvc.exe` for your system. The executable only needs Git on `PATH` for workspace operations.
+Download `wk-<platform>-v<version>` from [GitHub Releases](https://github.com/ChenLuoi/workit-rs/releases/latest). Pick `linux-{x64,arm64}-{gnu,musl}`, `darwin-{x64,arm64}`, or `win32-x64-msvc` for your system. Windows downloads end in `.exe`. Workspace operations require Git on `PATH`.
 
-The following commands install v0.1.2 on Linux x64 with glibc.
+With mise, run `mise use -g github:ChenLuoi/workit-rs --minimum-release-age 0h` to install the latest release as `wk`.
+
+The following commands install v0.1.3 directly on Linux x64 with glibc.
 
 ```sh
 (
@@ -16,8 +18,8 @@ The following commands install v0.1.2 on Linux x64 with glibc.
   tmp=$(mktemp -d)
   trap 'rm -rf -- "$tmp"' EXIT
   cd "$tmp"
-  version=0.1.2
-  asset="workit-rs-$version-linux-x64-gnu"
+  version=0.1.3
+  asset="wk-linux-x64-gnu-v$version"
   base="https://github.com/ChenLuoi/workit-rs/releases/download/v$version"
   curl -fsSLO "$base/$asset"
   curl -fsSLO "$base/SHA256SUMS"
