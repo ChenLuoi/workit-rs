@@ -370,16 +370,19 @@ pub(crate) fn run(cwd: &Path, workspace: Result<Workspace>) -> Result<()> {
             for name in &config.skills {
                 if let Some(issues) =
                     findings.check(name, crate::templates::skill_differences(&ws, name))
+                    && !issues.is_empty()
                 {
                     findings.problems.extend(issues);
+                    findings
+                        .problems
+                        .push(format!("Restore with wk sync --skills {name}"));
                 }
             }
-            let detail = if findings.problems.is_empty() {
-                format!("{} registered", config.skills.len())
-            } else {
-                "compare with this wk version; restore with wk skills sync".into()
-            };
-            checks.group("Official skills", &detail, findings);
+            checks.group(
+                "Official skills",
+                &format!("{} registered", config.skills.len()),
+                findings,
+            );
             let mut findings = Findings::default();
             for (id, preset) in &config.presets {
                 if findings

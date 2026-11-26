@@ -39,4 +39,4 @@ If no projects are registered, `wk start` prompts you to register the first one 
 ## Diagnostics and official skills
 
 - `wk doctor` reports workspace information and checks registered clones, active tasks, directory layout and registered official skills. It expands failed checks, performs no repairs and exits nonzero if a check fails.
-- `wk skills sync [skill]` restores one registered official skill or all of them from this wk binary. The whole selected skill directory belongs to wk, including supporting files. Sync replaces changes and removes extra files there. Keep team skills under separate names. After upgrading wk, review the resulting workspace Git diff and commit the intended update.
+- `wk sync --skills [skill]` restores one registered official skill or all of them from this wk binary. Use this option on its own, without project names. It replaces changes and removes extra files within each selected official skill directory. Keep team skills under separate names. After upgrading wk, review the resulting workspace Git diff and commit the intended update.

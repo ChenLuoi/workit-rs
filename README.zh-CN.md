@@ -76,7 +76,7 @@ just wk status feature/operations
 | 生成的工作区和任务文档 | `templates/workspace/`、`templates/task/`、`src/templates.rs` |
 | 官方工作区 skills | `templates/workspace/.agents/skills/`、`src/templates/skills.rs` |
 
-工作区文档由团队在初始化后自行维护。官方 **wk-cli** skill 解释命令接口，**wk-workspace-workflow** 说明如何选择项目、交接和关闭任务。修改 CLI 行为时应同步更新相应 skill 的源文件。Cargo 把它们编入两个发布渠道共用的二进制。升级后，在工作区运行 `wk doctor` 可检查已注册的 skills，再用 `wk skills sync [技能名]` 显式刷新。
+工作区文档由团队在初始化后自行维护。官方 **wk-cli** skill 解释命令接口，**wk-workspace-workflow** 说明如何选择项目、交接和关闭任务。修改 CLI 行为时应同步更新相应 skill 的源文件。Cargo 把它们编入两个发布渠道共用的二进制。升级后，在工作区运行 `wk doctor` 可检查已注册的 skills。用 `wk sync --skills wk-cli` 可将该 skill 的整个目录替换为内置版本。用 `wk sync --skills` 可刷新全部已注册的官方 skills。项目同步单独执行。
 
 任务模板使用创建时记录的项目名、职责和实际起始引用及提交。任务 README 和 AGENTS 使用同一份项目记录生成。`tests/cli.rs` 通过实际运行二进制来验证这些行为。
 

@@ -1572,9 +1572,56 @@ fn init_installs_selected_templates_and_sync_preserves_workspace_edits() {
         fs::rename(ws.join(".agents"), dir.join("saved")).unwrap();
         std::os::unix::fs::symlink(dir, ws.join(".agents")).unwrap();
         assert!(!run(&ws, WK, &["sync"]).status.success());
-        assert!(!run(&ws, WK, &["skills", "sync"]).status.success());
+        assert!(!run(&ws, WK, &["sync", "--skills"]).status.success());
         assert!(!dir.join("skills").exists());
     }
+}
+
+#[test]
+fn sync_distinguishes_official_skills_from_a_project_named_skills() {
+    let tmp = tempfile::tempdir().unwrap();
+    let source = source_repo(tmp.path(), "upstream");
+    ok(
+        tmp.path(),
+        WK,
+        &["init", "workspace", "--yes", "--skills", "wk-cli"],
+    );
+    let ws = tmp.path().join("workspace");
+    ok(
+        &ws,
+        WK,
+        &[
+            "add",
+            source.to_str().unwrap(),
+            "skills",
+            "--base",
+            "origin/trunk",
+        ],
+    );
+    let repo = ws.join("repos/skills");
+    fs::rename(&repo, tmp.path().join("previous-clone")).unwrap();
+    let skill = ws.join(".agents/skills/wk-cli/SKILL.md");
+    let bundled = fs::read(&skill).unwrap();
+    fs::write(&skill, "workspace edit").unwrap();
+
+    for args in [
+        &["sync", "skills", "--skills"][..],
+        &["sync", "--skills", "wk-cli", "skills"],
+    ] {
+        let out = run(&ws, WK, args);
+        assert_eq!(out.status.code(), Some(2));
+        assert!(String::from_utf8_lossy(&out.stderr).contains("cannot be used with"));
+    }
+    assert!(!repo.exists());
+    assert_eq!(fs::read_to_string(&skill).unwrap(), "workspace edit");
+
+    ok(&ws, WK, &["sync", "skills"]);
+    assert!(repo.join(".git").is_dir());
+    assert_eq!(fs::read_to_string(&skill).unwrap(), "workspace edit");
+    fs::rename(&repo, tmp.path().join("synced-clone")).unwrap();
+    ok(&ws, WK, &["sync", "--skills"]);
+    assert!(!repo.exists());
+    assert_eq!(fs::read(&skill).unwrap(), bundled);
 }
 
 #[test]
@@ -1607,13 +1654,14 @@ fn official_skills_are_checked_and_restored_independently() {
         "modified wk-cli/SKILL.md",
         "unexpected wk-cli/extra",
         "missing wk-workspace-workflow/SKILL.md",
-        "wk skills sync",
+        "wk sync --skills wk-cli",
+        "wk sync --skills wk-workspace-workflow",
     ] {
         assert!(details.contains(finding), "{details}");
     }
     assert_eq!(fs::read_to_string(&cli).unwrap(), "local edit");
-    assert!(!run(ws, WK, &["skills", "sync", "team"]).status.success());
-    ok(ws, WK, &["skills", "sync", "wk-cli"]);
+    assert!(!run(ws, WK, &["sync", "--skills", "team"]).status.success());
+    ok(ws, WK, &["sync", "--skills", "wk-cli"]);
     assert_eq!(fs::read_to_string(&cli).unwrap(), original);
     assert!(!skills.join("wk-cli/extra").exists());
     assert!(!workflow.exists());
@@ -1624,7 +1672,7 @@ fn official_skills_are_checked_and_restored_independently() {
         std::os::unix::fs::symlink(&custom, workflow.parent().unwrap()).unwrap();
         std::os::unix::fs::symlink(&custom, skills.join("wk-cli/linked")).unwrap();
     }
-    ok(ws, WK, &["skills", "sync"]);
+    ok(ws, WK, &["sync", "--skills"]);
     ok(ws, WK, &["doctor"]);
     assert_eq!(fs::read_to_string(custom.join("SKILL.md")).unwrap(), "team");
     assert_eq!(
