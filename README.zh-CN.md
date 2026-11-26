@@ -8,7 +8,7 @@
 
 从 [GitHub Releases](https://github.com/ChenLuoi/workit-rs/releases/latest) 下载 `wk-<平台>-v<版本>`。按系统选择 `linux-{x64,arm64}-{gnu,musl}`、`darwin-{x64,arm64}` 或 `win32-x64-msvc`，Windows 文件以 `.exe` 结尾。使用工作区功能需要能从 `PATH` 调用 Git。
 
-使用 mise 时，运行 `mise use -g github:ChenLuoi/workit-rs --minimum-release-age 0h` 即可将最新版安装为 `wk`。
+首次用 mise 安装时，运行 `mise use -g github:ChenLuoi/workit-rs --minimum-release-age 0h` 即可得到 `wk`。升级已有安装时，请将命令中的工具名写为 `github:ChenLuoi/workit-rs@latest`。
 
 以下命令适用于在使用 glibc 的 Linux x64 上直接安装 v0.1.3。
 
