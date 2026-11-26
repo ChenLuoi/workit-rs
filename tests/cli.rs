@@ -36,6 +36,46 @@ fn ok(dir: &Path, bin: &str, args: &[&str]) -> String {
     String::from_utf8(out.stdout).unwrap()
 }
 
+#[test]
+fn root_help_groups_commands_and_keeps_subcommand_help_local() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    let root = ok(dir, WK, &["help"]);
+    for flag in ["-h", "--help"] {
+        assert_eq!(ok(dir, WK, &[flag]), root);
+    }
+    let (intro, groups) = root.split_once("Daily tasks:").unwrap();
+    let (tasks, groups) = groups.split_once("Workspace:").unwrap();
+    let (workspace, groups) = groups.split_once("Projects and presets:").unwrap();
+    let (projects, options) = groups.split_once("Options:").unwrap();
+    assert!(intro.contains("Usage:"));
+    for (section, name) in [
+        (tasks, "start"),
+        (workspace, "doctor"),
+        (projects, "preset"),
+    ] {
+        assert!(
+            section
+                .lines()
+                .any(|line| line.split_whitespace().next() == Some(name)),
+            "{section}"
+        );
+    }
+    for (name, alias) in [("add", "clone"), ("remove", "rm")] {
+        assert!(
+            projects
+                .lines()
+                .any(|line| line.split_whitespace().next() == Some(name)
+                    && line.contains(&format!("[alias: {alias}]")))
+        );
+    }
+    assert!(options.contains("--workspace") && options.contains("wk help <command>"));
+
+    let start = ok(dir, WK, &["start", "--help"]);
+    assert_eq!(ok(dir, WK, &["help", "start"]), start);
+    assert!(start.contains("--preset") && !start.contains("Daily tasks:"));
+}
+
 fn source_repo(root: &Path, name: &str) -> std::path::PathBuf {
     let source = root.join(name);
     fs::create_dir(&source).unwrap();

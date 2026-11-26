@@ -64,7 +64,7 @@ An empty project list makes `wk start` point to `wk add <url>`. With no active t
 
 `wk start` creates an empty bare repository at `tasks/<task>/.git` so Git and Codex discover the task root. Run Git commands in the member worktrees to review and commit code. Shared task guides, skills and notes are untracked and are removed by `wk close`.
 
-To work on the task, start a new session using the launch command printed by `start`. Run `just wk --help` for the command inventory. Use `-w <dir>` to target another workspace. `just clean-dev` deletes the entire local development workspace, including its Git data.
+To work on the task, start a new session using the launch command printed by `start`. Run `just wk help` to browse commands by workflow, or `just wk help start` for task creation options. Use `-w <dir>` to target another workspace. `just clean-dev` deletes the entire local development workspace, including its Git data.
 
 ## Where to make changes
 

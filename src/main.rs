@@ -1,4 +1,5 @@
 mod git;
+mod help;
 mod history;
 mod preset;
 mod prompt;
@@ -17,7 +18,7 @@ use tool::Tool;
 use workspace::Workspace;
 
 #[derive(Parser)]
-#[command(name = "wk", version, about)]
+#[command(name = "wk", version, about, defer = help::group_root_commands)]
 struct Cli {
     /// Workspace directory (default: WK_WORKSPACE, or discover from current directory).
     #[arg(long, short = 'w', global = true)]
@@ -28,7 +29,53 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Action {
-    /// Create a committable Git workspace in an empty directory and optionally add a project.
+    /// Create or resume a task and print launch commands.
+    ///
+    /// Omit projects in a terminal to select them with Space and Enter.
+    /// Existing tasks resume with their recorded projects and commits.
+    Start(tasks::StartOptions),
+    /// Launch a tool in the task directory.
+    ///
+    /// Omit the tool to choose interactively from the enabled tools on PATH.
+    Run {
+        /// Name of the active task to launch. Use wk status to list active tasks.
+        task: Option<String>,
+        /// Tool to open for this task.
+        #[arg(long, conflicts_with_all = ["codex", "claude"])]
+        agent: Option<Tool>,
+        /// Shorthand for --agent codex.
+        #[arg(long, conflicts_with = "claude")]
+        codex: bool,
+        /// Shorthand for --agent claude.
+        #[arg(long)]
+        claude: bool,
+    },
+    /// List projects and active tasks, or inspect one task.
+    Status {
+        /// Show each member's recorded starting point, current checkout and changed files.
+        task: Option<String>,
+        /// Output the report as JSON.
+        #[arg(long)]
+        json: bool,
+        /// Fetch origin for the projects in this report before reading their status.
+        #[arg(long)]
+        fetch: bool,
+    },
+    /// Print the absolute path to a task or one of its projects.
+    Path {
+        task: String,
+        project: Option<String>,
+    },
+    /// Remove a task directory and its worktrees. Keep the branches.
+    ///
+    /// Closing checks all member worktrees and deletes shared files in the task directory.
+    Close {
+        task: String,
+        /// Confirm recovery of a damaged task outside a terminal.
+        #[arg(long)]
+        force: bool,
+    },
+    /// Create a Git workspace in an empty directory.
     Init {
         /// Target directory (default: WK_WORKSPACE or current directory).
         dir: Option<PathBuf>,
@@ -53,8 +100,19 @@ enum Action {
     },
     /// Choose personal or shared workspace settings.
     Setup(setup::SetupOptions),
-    /// Clone into a new repos/<directory> and register the project in wk.yaml.
+    /// Sync project reference clones or restore registered official skills.
+    Sync {
+        /// Projects to clone or refresh at their configured bases (default: locally enabled projects).
+        projects: Vec<String>,
+        /// Replace a registered official skill directory with the bundled copy. Omit NAME to replace all registered skills.
+        #[arg(long, value_name = "NAME", conflicts_with = "projects")]
+        skills: Option<Option<String>>,
+    },
+    /// Check workspace health and report problems.
+    Doctor,
+    /// Clone and register a project.
     ///
+    /// Clone into repos/<directory> and register the project in wk.yaml.
     /// With only a URL, confirm the directory, choose a remote branch by prefix,
     /// and optionally describe the project. Enter accepts the defaults.
     /// Scripts use these defaults automatically. Use --base for any other Git ref.
@@ -71,68 +129,16 @@ enum Action {
         #[arg(long)]
         description: Option<String>,
     },
-    /// Sync project reference clones or restore registered official skills.
-    Sync {
-        /// Projects to clone or refresh at their configured bases (default: locally enabled projects).
-        projects: Vec<String>,
-        /// Replace a registered official skill directory with the bundled copy. Omit NAME to replace all registered skills.
-        #[arg(long, value_name = "NAME", conflicts_with = "projects")]
-        skills: Option<Option<String>>,
-    },
-    /// Remove a project and its local Git repository after checking for work to keep.
+    /// Unregister a project and remove its local clone.
     ///
     /// Close its tasks and other worktrees first. Local changes and commits
     /// absent from the locally known origin branches prevent deletion.
     #[command(visible_alias = "rm")]
     Remove { project: String },
-    /// Create or resume a task and print launch commands.
-    ///
-    /// Omit projects in a terminal to select them with Space and Enter.
-    /// Existing tasks resume with their recorded projects and commits.
-    Start(tasks::StartOptions),
     /// Manage reusable combinations of projects, starting refs and task skills.
     Preset {
         #[command(subcommand)]
         command: preset::PresetAction,
-    },
-    /// Launch an enabled tool in the task directory. Omit the tool to choose interactively.
-    Run {
-        /// Name of the active task to launch. Use wk status to list active tasks.
-        task: Option<String>,
-        /// Tool to open for this task.
-        #[arg(long, conflicts_with_all = ["codex", "claude"])]
-        agent: Option<Tool>,
-        /// Shorthand for --agent codex.
-        #[arg(long, conflicts_with = "claude")]
-        codex: bool,
-        /// Shorthand for --agent claude.
-        #[arg(long)]
-        claude: bool,
-    },
-    /// Print the absolute path to a task or one of its projects.
-    Path {
-        task: String,
-        project: Option<String>,
-    },
-    /// Show all projects and active tasks, or inspect one active task in detail.
-    Status {
-        /// Show each member's recorded starting point, current checkout and changed files.
-        task: Option<String>,
-        /// Output the report as JSON.
-        #[arg(long)]
-        json: bool,
-        /// Fetch origin for the projects in this report before reading their status.
-        #[arg(long)]
-        fetch: bool,
-    },
-    /// Show workspace information and diagnose projects, active tasks, official skills and directory layout.
-    Doctor,
-    /// Delete tasks/<task>/ including shared resources after checking all worktrees. Keep the Git branches.
-    Close {
-        task: String,
-        /// Confirm recovery of a damaged task outside a terminal.
-        #[arg(long)]
-        force: bool,
     },
 }
 
